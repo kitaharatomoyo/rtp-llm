@@ -1,3 +1,4 @@
+import logging
 from typing import Dict
 
 import torch
@@ -39,11 +40,15 @@ def init_deepep_env_once(config: GptInitModelParameters):
 class FusedMoeFactory(object):
     @staticmethod
     def _create_fp8_per_block_fused_moe(
-        config: GptInitModelParameters, weights: Dict[str, torch.Tensor]
+        config: GptInitModelParameters,
+        weights: Dict[str, torch.Tensor],
+        is_prefill: bool = False,
     ):
+        # logging.info(f"vvv create_fp8_per_block_fused_moe: config={config}")
         assert utils.is_cuda(), "FP8_PER_BLOCK only supports cuda"
         # single gpu
         if config.ep_size == 1 or config.tp_size == config.ep_size:
+            # logging.info(f"vvv 111 create_fp8_per_block_fused_moe: config={config}")
             from rtp_llm.models_py.modules.moe.executors.deepep_normal_executor import (
                 DeepGemmContinousExecutor,
             )
@@ -56,8 +61,10 @@ class FusedMoeFactory(object):
             return FusedMoe(router, executor, expert_num=config.expert_num)
         # ep moe
         else:
+            # logging.info(f"vvv 222 create_fp8_per_block_fused_moe: config={config}")
             init_deepep_env_once(config)
-            if config.moe_config.use_deepep_low_latency:
+            if config.moe_config.use_deepep_low_latency and not is_prefill:
+                # logging.info(f"vvv 333 create_fp8_per_block_fused_moe: config={config}")
                 from rtp_llm.models_py.modules.moe.executors.deepgemm_masked_executor import (
                     DeepGemmMaskedExecutor,
                 )
@@ -81,6 +88,7 @@ class FusedMoeFactory(object):
                 )
                 return FusedMoe(router, executor, expert_num=config.expert_num)
             else:
+                # logging.info(f"vvv 444 create_fp8_per_block_fused_moe: config={config}")
                 from rtp_llm.models_py.modules.moe.executors.deepep_normal_executor import (
                     DeepGemmContinousExecutor,
                 )
@@ -94,7 +102,9 @@ class FusedMoeFactory(object):
 
     @staticmethod
     def _create_fp8_per_tensor_fused_moe(
-        config: GptInitModelParameters, weights: Dict[str, torch.Tensor]
+        config: GptInitModelParameters,
+        weights: Dict[str, torch.Tensor],
+        is_prefill: bool = False,
     ):
         assert utils.is_cuda(), "FP8_PER_TENSOR only supports cuda"
         from rtp_llm.models_py.modules.moe.executors.cutlass_moe import (
@@ -110,7 +120,7 @@ class FusedMoeFactory(object):
 
         if config.ep_size > 1:
             init_deepep_env_once(config)
-            if config.moe_config.use_deepep_low_latency:
+            if config.moe_config.use_deepep_low_latency and not is_prefill:
                 max_num_tokens = (
                     config.max_generate_batch_size + config.tp_size - 1
                 ) // config.tp_size
@@ -197,7 +207,9 @@ class FusedMoeFactory(object):
 
     @staticmethod
     def create_fused_moe(
-        config: GptInitModelParameters, weights: Dict[str, torch.Tensor]
+        config: GptInitModelParameters,
+        weights: Dict[str, torch.Tensor],
+        is_prefill: bool = False,
     ) -> FusedMoe:
         # TODO get_method should return enu class other than string
         device_type = get_device().get_device_type()
@@ -208,7 +220,12 @@ class FusedMoeFactory(object):
                 raise ValueError(f"Quantization for rocm moe is not yet supported")
         else:
             if config.quant_config is None:
-                if config.ep_size > 1 and config.moe_config.use_deepep_low_latency:
+                if (
+                    config.ep_size > 1
+                    and config.moe_config.use_deepep_low_latency
+                    and not is_prefill
+                ):
+                    # logging.info(f"vvv 111 create_fused_moe: config={config}")
                     init_deepep_env_once(config)
                     from rtp_llm.models_py.modules.moe.executors.deepgemm_masked_executor import (
                         DeepGemmMaskedExecutor,
@@ -231,6 +248,7 @@ class FusedMoeFactory(object):
                     )
                     return FusedMoe(router, executor, expert_num=config.expert_num)
                 else:
+                    # logging.info(f"vvv 222 create_fused_moe: config={config}")
                     from rtp_llm.models_py.modules.moe.fused_batched_moe import (
                         BatchedTritonExperts,
                     )
@@ -252,13 +270,20 @@ class FusedMoeFactory(object):
                     )
                     return FusedMoe(router, experts, expert_num=config.expert_num)
             elif config.quant_config.get_method() == "FP8_PER_BLOCK":
-                return FusedMoeFactory._create_fp8_per_block_fused_moe(config, weights)
+                # logging.info(f"vvv 333 create_fused_moe: config={config}")
+                return FusedMoeFactory._create_fp8_per_block_fused_moe(
+                    config, weights, is_prefill
+                )
             elif config.quant_config.get_method() in [
                 "FP8_PER_TENSOR_COMPRESSED",
                 "FP8_DYNAMIC_PER_TENSOR",
             ]:
-                return FusedMoeFactory._create_fp8_per_tensor_fused_moe(config, weights)
+                # logging.info(f"vvv 444 create_fused_moe: config={config}")
+                return FusedMoeFactory._create_fp8_per_tensor_fused_moe(
+                    config, weights, is_prefill
+                )
             else:
+                # logging.info(f"vvv 555 create_fused_moe: config={config}")
                 raise ValueError(
                     f"Unsupported quantization method: {config.quant_config.get_method()}"
                 )

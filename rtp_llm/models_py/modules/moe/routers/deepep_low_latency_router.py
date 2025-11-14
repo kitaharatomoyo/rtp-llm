@@ -40,7 +40,7 @@ class DeepEpLowLatencyRouter(FusedMoeDataRouter):
     ):
         super().__init__()
         self._config = config
-        self._buffer = get_deepep_wrapper().buffer
+        self._buffer = get_deepep_wrapper().low_latency_buffer
         self._num_max_dispatch_tokens_per_rank = (
             get_deepep_wrapper().ll_num_max_token_per_rank
         )

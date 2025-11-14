@@ -463,6 +463,7 @@ ParamsPtr FlashInferAttnParams::prepare(rtp_llm::DeviceBase*             device,
                     attn_configs.kv_lora_rank,
                     attn_configs.use_mla,
                     reinterpret_cast<int64_t>(cuda_device->getStream()),
+                    // (!is_prefill));  // cuda_stream
                     false);  // cuda_stream
 
     return ret;
