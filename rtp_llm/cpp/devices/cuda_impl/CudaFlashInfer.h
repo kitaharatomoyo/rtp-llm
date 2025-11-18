@@ -57,6 +57,9 @@ public:
     torch::Tensor plan;
     DataType      dtype = DataType::TYPE_INVALID;
 
+    rtp_llm::AttentionConfigs attn_configs;
+    bool                      is_prefill;
+
     static bool
     check(rtp_llm::DeviceBase* device, const rtp_llm::AttentionConfigs& attn_configs, DataType dtype, bool is_prefill);
 

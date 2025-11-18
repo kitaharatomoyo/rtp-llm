@@ -37,7 +37,7 @@ class DeepepNormalRouter(FusedMoeDataRouter):
         self.num_dispatchers = config.world_size // config.tp_size
         self.rank_expert_offset = self.ep_rank * self.expert_num_per_rank
         self.top_k = config.moe_topk_group
-        self.deepep_buffer_wrapper = get_deepep_wrapper()
+        self.buffer = get_deepep_wrapper().normal_buffer
         self.use_fp8 = use_fp8
         self.async_mode = async_mode
         self.expert_alignment = expert_alignment
@@ -94,9 +94,7 @@ class DeepepNormalRouter(FusedMoeDataRouter):
             num_tokens_per_expert,
             is_token_in_rank,
             event1,
-        ) = self.deepep_buffer_wrapper.buffer.get_dispatch_layout(
-            tp_expert_ids, num_experts
-        )
+        ) = self.buffer.get_dispatch_layout(tp_expert_ids, num_experts)
         # dispatch
         (
             output,
@@ -105,7 +103,7 @@ class DeepepNormalRouter(FusedMoeDataRouter):
             num_recv_tokens_per_expert_list,
             self.handle,
             event2,
-        ) = self.deepep_buffer_wrapper.buffer.dispatch(
+        ) = self.buffer.dispatch(
             tp_expert_input,
             None,
             num_tokens_per_rank,
@@ -171,9 +169,7 @@ class DeepepNormalRouter(FusedMoeDataRouter):
                 )
 
         assert self.handle is not None, "handler is None"
-        out_token, _, event = self.deepep_buffer_wrapper.buffer.combine(
-            fused_expert_output, self.handle
-        )
+        out_token, _, event = self.buffer.combine(fused_expert_output, self.handle)
         self.handle = None
 
         # gather

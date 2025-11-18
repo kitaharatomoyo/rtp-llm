@@ -19,7 +19,7 @@ grpc::Status LocalRpcServer::init(const EngineInitParams&                       
     maga_init_params_ = maga_init_params;
     metrics_reporter_ = maga_init_params.metrics_reporter;
     RTP_LLM_LOG_INFO("LocalRpcServer aux_string %s",
-                        maga_init_params_.gpt_init_parameter.misc_config.aux_string.c_str());
+                     maga_init_params_.gpt_init_parameter.misc_config.aux_string.c_str());
     if (propose_params) {
         propose_maga_init_params_ = propose_params.get();
         if (!mm_process_engine.is_none()) {
@@ -124,6 +124,7 @@ grpc::Status LocalRpcServer::GenerateStreamCall(grpc::ServerContext*            
                                                 grpc::ServerWriter<GenerateOutputsPB>* writer) {
     AtomicGuard request_guard(onflight_requests_);
     auto        request_id = request->request_id();
+    RTP_LLM_LOG_INFO("vvvv receive request %ld", request_id);
     RTP_LLM_LOG_DEBUG("receive request %ld", request_id);
     auto generate_context =
         GenerateContext(request_id, request->generate_config().timeout_ms(), context, metrics_reporter_, meta_);
@@ -141,12 +142,14 @@ grpc::Status LocalRpcServer::GenerateStreamCall(grpc::ServerContext*            
     input->lora_id  = engine_->getLoraManager()->getLoraId(input->generate_config->adapter_name);
     auto lora_guard = lora::LoraResourceGuard(engine_->getLoraManager(), input->generate_config->adapter_name);
     RTP_LLM_LOG_DEBUG("request [%ld] trans to stream success", request_id);
+    RTP_LLM_LOG_INFO("vvv request [%ld] trans to stream success", request_id);
     generate_context.setStream(engine_->enqueue(input));
 
     RTP_LLM_LOG_DEBUG("request [%ld] enqueue success", request_id);
 
     generate_context.error_status =
         pollStreamOutput(context, generate_context.request_key, writer, generate_context.getStream());
+    RTP_LLM_LOG_INFO("vvvrequest [%ld] dequeue success", request_id);
     meta_->dequeue(generate_context.request_id, generate_context.getStream());
     return generate_context.error_status;
 }

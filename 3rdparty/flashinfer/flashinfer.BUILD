@@ -9,6 +9,9 @@ common_copts = [
     '-DFLASHINFER_ENABLE_FP8_E4M3',
 ]
 
+debug_copts = [
+]
+
 sm90_cuda_copts = copts() + cuda_default_copts_without_arch() + if_cuda(["-nvcc_options=objdir-as-tempdir"]) + [
     '--cuda-include-ptx=sm_90', '--cuda-gpu-arch=sm_90',
     '--cuda-include-ptx=sm_90a', '--cuda-gpu-arch=sm_90a',
@@ -120,7 +123,7 @@ single_decode = ['single_decode_head_qk_128_head_vo_128_posenc_0_dtypeq_bf16_dty
 
 single_prefill = ['single_prefill_head_qk_128_head_vo_128_posenc_0_fp16qkred_0_mask_1_dtypeq_bf16_dtypekv_bf16_dtypeout_bf16.cu', 'single_prefill_head_qk_128_head_vo_128_posenc_0_fp16qkred_0_mask_1_dtypeq_bf16_dtypekv_e4m3_dtypeout_bf16.cu', 'single_prefill_head_qk_128_head_vo_128_posenc_0_fp16qkred_0_mask_1_dtypeq_bf16_dtypekv_e5m2_dtypeout_bf16.cu', 'single_prefill_head_qk_128_head_vo_128_posenc_0_fp16qkred_0_mask_1_dtypeq_f16_dtypekv_e4m3_dtypeout_f16.cu', 'single_prefill_head_qk_128_head_vo_128_posenc_0_fp16qkred_0_mask_1_dtypeq_f16_dtypekv_e5m2_dtypeout_f16.cu', 'single_prefill_head_qk_128_head_vo_128_posenc_0_fp16qkred_0_mask_1_dtypeq_f16_dtypekv_f16_dtypeout_f16.cu', 'single_prefill_head_qk_64_head_vo_64_posenc_0_fp16qkred_0_mask_1_dtypeq_bf16_dtypekv_bf16_dtypeout_bf16.cu', 'single_prefill_head_qk_64_head_vo_64_posenc_0_fp16qkred_0_mask_1_dtypeq_bf16_dtypekv_e4m3_dtypeout_bf16.cu', 'single_prefill_head_qk_64_head_vo_64_posenc_0_fp16qkred_0_mask_1_dtypeq_bf16_dtypekv_e5m2_dtypeout_bf16.cu', 'single_prefill_head_qk_64_head_vo_64_posenc_0_fp16qkred_0_mask_1_dtypeq_f16_dtypekv_e4m3_dtypeout_f16.cu', 'single_prefill_head_qk_64_head_vo_64_posenc_0_fp16qkred_0_mask_1_dtypeq_f16_dtypekv_e5m2_dtypeout_f16.cu', 'single_prefill_head_qk_64_head_vo_64_posenc_0_fp16qkred_0_mask_1_dtypeq_f16_dtypekv_f16_dtypeout_f16.cu']
 
-sub_lib('flashinfer_batch_paged_prefill', batch_paged_prefill, cuda_copts() + common_copts)
+sub_lib('flashinfer_batch_paged_prefill', batch_paged_prefill, cuda_copts() + common_copts + debug_copts)
 sub_lib('flashinfer_batch_paged_decode', batch_paged_decode, cuda_copts() + common_copts)
 sub_lib('flashinfer_batch_ragged_prefill', batch_ragged_prefill, cuda_copts() + common_copts)
 sub_lib('flashinfer_single_decode', single_prefill, cuda_copts() + common_copts)
@@ -193,6 +196,6 @@ cc_library(
         ":flashinfer_hdrs",
         ":aot_default_additional_params",
     ],
-    copts = cuda_copts() + common_copts,
+    copts = cuda_copts() + common_copts + debug_copts,
     visibility = ["//visibility:public"],
 )

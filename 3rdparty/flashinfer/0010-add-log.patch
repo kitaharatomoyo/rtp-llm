@@ -1,0 +1,77 @@
+diff --git include/flashinfer/attention/decode.cuh include/flashinfer/attention/decode.cuh
+index 35a79f0..f5f7c83 100644
+--- include/flashinfer/attention/decode.cuh
++++ include/flashinfer/attention/decode.cuh
+@@ -734,6 +734,14 @@ cudaError_t BatchDecodeWithPagedKVCacheDispatched(Params params, typename Params
+           2 * NUM_STAGES_SMEM * tile_size_per_bdx * bdy * bdz * HEAD_DIM * sizeof(DTypeKV) +
+           std::max(tile_size_per_bdx * num_threads * sizeof(DTypeKV*),
+                    2 * bdy * bdz * sizeof(float));
++      printf("www smem_size: %d\n", smem_size);
++      printf("www tile_size_per_bdx: %d\n", tile_size_per_bdx);
++      printf("www num_threads: %d\n", num_threads);
++      printf("bdx: %d\n", bdx);
++      printf("www bdy: %d\n", bdy);
++      printf("www bdz: %d\n", bdz);
++      printf("www HEAD_DIM: %d\n", HEAD_DIM);
++      printf("www sizeof(DTypeKV): %d\n", sizeof(DTypeKV));
+       auto kernel =
+           BatchDecodeWithPagedKVCacheKernel<POS_ENCODING_MODE, NUM_STAGES_SMEM, tile_size_per_bdx,
+                                             vec_size, bdx, bdy, bdz, AttentionVariant, Params>;
+@@ -742,6 +750,11 @@ cudaError_t BatchDecodeWithPagedKVCacheDispatched(Params params, typename Params
+ 
+       if (tmp_v == nullptr) {
+         // do not use partition-kv kernel
++        printf("www padded_batch_size: %d\n", padded_batch_size);
++        printf("www num_kv_heads: %d\n", num_kv_heads);
++        printf("www bdx: %d\n", bdx);
++        printf("www bdy: %d\n", bdy);
++        printf("www bdz: %d\n", bdz);
+         dim3 nblks(padded_batch_size, num_kv_heads);
+         dim3 nthrs(bdx, bdy, bdz);
+         params.partition_kv = false;
+@@ -750,12 +763,18 @@ cudaError_t BatchDecodeWithPagedKVCacheDispatched(Params params, typename Params
+             cudaLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
+       } else {
+         // use partition-kv kernel
++
+         params.partition_kv = true;
+         auto o = params.o;
+         auto lse = params.lse;
+         params.o = tmp_v;
+         params.lse = tmp_s;
+         void* args[] = {(void*)&params};
++        printf("www padded_batch_size: %d\n", padded_batch_size);
++        printf("www num_kv_heads: %d\n", num_kv_heads);
++        printf("www bdx: %d\n", bdx);
++        printf("www bdy: %d\n", bdy);
++        printf("www bdz: %d\n", bdz);
+         dim3 nblks(padded_batch_size, num_kv_heads);
+         dim3 nthrs(bdx, bdy, bdz);
+         FLASHINFER_CUDA_CALL(
+diff --git include/flashinfer/attention/scheduler.cuh include/flashinfer/attention/scheduler.cuh
+index d2cf78f..42fb104 100644
+--- include/flashinfer/attention/scheduler.cuh
++++ include/flashinfer/attention/scheduler.cuh
+@@ -298,7 +298,11 @@ inline cudaError_t BatchDecodeWithPagedKVCacheWorkEstimationDispatchedMlaCuteSM8
+   // fixme: num_blocks_per_sm is 0 derived from cudaOccupancyMaxActiveBlocksPerMultiprocessor at
+   // times, and we fill smem with q-heads as many as possible, so num_blocks_per_sm should be 1
+   num_blocks_per_sm = 1;
+-
++  printf("www num_blocks_per_sm: %d, num_sm: %d\n", num_blocks_per_sm, num_sm);
++  printf("www gdy: %d\n", gdy);
++  printf("www batch_size: %d\n", batch_size);
++  printf("www max_grid_size: %d\n", max_grid_size);
++  printf("www dev_id: %d\n", dev_id);
+   max_grid_size = num_blocks_per_sm * num_sm;
+   if (batch_size * gdy >= max_grid_size) {
+     split_kv = false;
+@@ -317,6 +321,9 @@ inline cudaError_t BatchDecodeWithPagedKVCacheWorkEstimationDispatchedMlaCuteSM8
+     std::tie(max_num_pages_per_batch, new_batch_size) =
+         PartitionPagedKVCacheBinarySearchMinNumPagePerBatch(max_grid_size, gdy, num_pages,
+                                                             std::max(128 / page_size, 1U));
++    printf("www new_batch_size = %d\n", new_batch_size);
++    printf("www batch_size = %d\n", batch_size);
++    printf("www enable_cuda_graph = %d\n", enable_cuda_graph);
+     if (new_batch_size == batch_size && !enable_cuda_graph) {
+       // do not use partition-kv kernel for short sequence, when not using CUDAGraph
+       split_kv = false;

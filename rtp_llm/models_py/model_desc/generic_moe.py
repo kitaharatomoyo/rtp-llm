@@ -5,7 +5,9 @@ import torch
 from torch import nn
 
 from rtp_llm.config.gpt_init_model_parameters import GptInitModelParameters
+from rtp_llm.distribute.collective import Group, all_reduce
 from rtp_llm.model_loader.model_weight_info import ModelWeights
+from rtp_llm.models_py.distributed.deepep_wrapper import get_deepep_wrapper
 from rtp_llm.models_py.model_desc.module_base import GptModelBase
 from rtp_llm.models_py.modules import RMSNorm, SelectTopk
 from rtp_llm.models_py.modules.attention import CausalAttention
@@ -171,7 +173,24 @@ class GenericMoeLayer(nn.Module):
 
         self.gate = Linear(weights[W.moe_gate], None)
         self.select_topk = SelectTopk(config)
-        self.fused_moe: FusedMoe = FusedMoeFactory.create_fused_moe(config, weights)
+        self.prefill_fused_moe: FusedMoe = FusedMoeFactory.create_fused_moe(
+            config, weights, is_prefill=True
+        )
+        logging.info(
+            f"prefill_fused_moe.router.type = {type(self.prefill_fused_moe.router)}"
+        )
+        logging.info(
+            f"prefill_fused_moe.executor.type = {type(self.prefill_fused_moe.fused_experts)}"
+        )
+        self.decode_fused_moe: FusedMoe = FusedMoeFactory.create_fused_moe(
+            config, weights, is_prefill=False
+        )
+        logging.info(
+            f"decode_fused_moe.router.type = {type(self.decode_fused_moe.router)}"
+        )
+        logging.info(
+            f"decode_fused_moe.executor.type = {type(self.decode_fused_moe.fused_experts)}"
+        )
         self.w1 = weights.get(W.moe_w1, None)
         self.w2 = weights.get(W.moe_w2, None)
         assert (
@@ -190,7 +209,9 @@ class GenericMoeLayer(nn.Module):
         expert_map[start_id:end_id] = torch.tensor(list(range(num_local_experts)))
         return expert_map.to(device=torch.cuda.current_device(), dtype=torch.int32)
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, is_normal_mode: bool = False
+    ) -> torch.Tensor:
         num_tokens, _ = hidden_states.shape
         router_logits = self.gate(hidden_states)
 
@@ -209,13 +230,32 @@ class GenericMoeLayer(nn.Module):
 
         self.select_topk(router_logits_fp32, topk_ids, topk_weights)
 
-        return self.fused_moe(
+        # Log before calling fused_moe
+        logging.info(
+            f"[GenericMoeLayer.forward]"
+            f"EP_RANK={self.config.ep_rank} "
+            f"Calling fused_moe with num_tokens={num_tokens}, "
+        )
+
+        if is_normal_mode:
+            fused_moe = self.prefill_fused_moe
+        else:
+            fused_moe = self.decode_fused_moe
+
+        result = fused_moe(
             hidden_states=hidden_states,
             topk_weights=topk_weights,
             topk_ids=topk_ids,
             activation="SiGLU",
             expert_map=self.expert_map,
         )
+
+        logging.info(
+            f"[GenericMoeLayer.forward]"
+            f"EP_RANK={self.config.ep_rank} fused_moe returned successfully"
+        )
+
+        return result
 
 
 class GenericMoeDecoderLayer(nn.Module):
@@ -266,6 +306,7 @@ class GenericMoeDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         fmha_impl: FMHAImplBase,
         kv_cache: Optional[KVCache] = None,
+        is_normal_mode: bool = False,
     ) -> torch.Tensor:
         # Self Attention
         residual = hidden_states
@@ -286,7 +327,7 @@ class GenericMoeDecoderLayer(nn.Module):
             hidden_states = self.shared_mlp(hidden_states)
         else:
             # MoE layer
-            experts_output = self.moe_mlp(hidden_states)
+            experts_output = self.moe_mlp(hidden_states, is_normal_mode=is_normal_mode)
 
             if self.shared_mlp is not None:
                 shared_mlp_output = self.shared_mlp(hidden_states)
@@ -327,6 +368,19 @@ class GenericMoeModel(GptModelBase):
         input_ids: torch.Tensor = inputs.input_ids
         inputs_embeds = self.embed_tokens(input_ids)
         hidden_states = inputs_embeds
+        logging.info(
+            f"[GenericMoeModel.forward]"
+            f"EP_RANK={self.config.ep_rank} forward Start"
+            f"inputs.attention_inputs.is_normal_mode={inputs.attention_inputs.is_normal_mode}\n"
+            f"input_ids.shape={input_ids.shape}\n"
+            f"inputs.attention_inputs.input_lengths.shape={inputs.attention_inputs.input_lengths.shape}\n"
+            f"inputs.attention_inputs.sequence_lengths.shape={inputs.attention_inputs.sequence_lengths.shape}\n"
+            f"inputs.attention_inputs.prefix_lengths.shape={inputs.attention_inputs.prefix_lengths.shape}\n"
+            f"inputs.attention_inputs.kv_cache_block_id_host.shape={inputs.attention_inputs.kv_cache_block_id_host.shape}\n"
+            f"inputs.attention_inputs.kv_cache_block_id_device.shape={inputs.attention_inputs.kv_cache_block_id_device.shape}\n"
+            f"inputs.attention_inputs.padding_offset.shape={inputs.attention_inputs.padding_offset.shape}\n"
+            f"inputs.attention_inputs.dtype={inputs.attention_inputs.dtype}\n"
+        )
         attention_inputs: PyAttentionInputs = inputs.attention_inputs
         impl_method = FMHAImplFactory.get_fmha_impl_method(self.attention_type)
         fmha_impl = getattr(self, impl_method)(attention_inputs)
@@ -336,11 +390,65 @@ class GenericMoeModel(GptModelBase):
                 hidden_states,
                 fmha_impl,
                 kv_cache=self.kv_cache.get_layer_cache(i) if self.kv_cache else None,
+                is_normal_mode=inputs.attention_inputs.is_normal_mode,
             )
 
         hidden_states = self.norm(hidden_states)
-
+        logging.info(
+            f"[GenericMoeModel.forward]"
+            f"EP_RANK={self.config.ep_rank} forward Success"
+        )
         return PyModelOutputs(hidden_states, fmha_impl.fmha_params)
+
+    # override
+    def sync_global_infos(self, inputs: PyModelInputs) -> bool:
+        local_is_prefill = inputs.attention_inputs.is_prefill and (
+            inputs.input_ids.shape[0] > 1
+        )
+        local_is_prefill = torch.tensor(
+            [1 if local_is_prefill else 0],
+            dtype=torch.int32,
+            device=inputs.input_ids.device,
+        )
+        global_is_prefill_tensor = all_reduce(local_is_prefill, group=Group.DP_AND_TP)
+        global_is_prefill = bool(global_is_prefill_tensor.item() > 0)
+
+        if global_is_prefill:
+            logging.info(
+                f"sync_global_infos: local_is_prefill={local_is_prefill}, global_is_prefill={global_is_prefill}"
+            )
+            return True
+
+        token_nums = inputs.input_ids.shape[0]
+        token_nums_tensor = torch.tensor(
+            [token_nums], dtype=torch.int32, device=inputs.input_ids.device
+        )
+        global_token_nums_tensor = all_reduce(token_nums_tensor, group=Group.DP_AND_TP)
+        global_token_nums = int(global_token_nums_tensor.item())
+        max_token_per_rank = get_deepep_wrapper().ll_num_max_token_per_rank
+        max_token_per_rank = 4
+        is_normal_mode = (
+            True
+            if (max_token_per_rank == 0 or global_token_nums > max_token_per_rank)
+            else False
+        )
+        if is_normal_mode:
+            logging.info(
+                f"sync_global_infos: token_nums={token_nums}, global_token_nums={global_token_nums}, max_token_per_rank={max_token_per_rank}, is_normal_mode={is_normal_mode}"
+            )
+        if inputs.attention_inputs.is_prefill != is_normal_mode:
+            logging.info(
+                f"sync_global_infos: "
+                f"EP_RANK={self.config.ep_rank} forward Start"
+                f"input_ids.shape={inputs.input_ids.shape}"
+                f"input_ids.attention_inputs.input_lengths.shape={inputs.attention_inputs.input_lengths.shape}"
+                f"input_ids.attention_inputs.sequence_lengths.shape={inputs.attention_inputs.sequence_lengths.shape}"
+                f"input_ids.attention_inputs.prefix_lengths.shape={inputs.attention_inputs.prefix_lengths.shape}"
+            )
+            logging.info(
+                f"sync_global_infos: token_nums={token_nums}, global_token_nums={global_token_nums}, max_token_per_rank={max_token_per_rank}, is_normal_mode={is_normal_mode}"
+            )
+        return is_normal_mode
 
 
 __all__ = [
