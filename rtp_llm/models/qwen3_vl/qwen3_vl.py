@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.library as tl
@@ -18,6 +18,8 @@ from rtp_llm.models.multimodal.multimodal_util import get_bytes_io_from_url
 from rtp_llm.models.qwen2_5_vl.qwen2_5_vl import QWen2_5_VL, Qwen2_5_VLImageEmbedding
 from rtp_llm.models.qwen2_vl.qwen2_vl_vit import MAX_PIXELS, MIN_PIXELS, smart_resize
 from rtp_llm.models.qwen_v3 import QwenV3, QWenV3Weight
+from rtp_llm.models_py.model_desc.module_base import GptModelBase
+from rtp_llm.models_py.model_desc.qwen3vl import Qwen3VLModel
 from rtp_llm.utils.base_model_datatypes import (
     MMPreprocessConfig,
     MMUrlType,
@@ -138,6 +140,9 @@ class QWen3_VL(QwenV3, MultiModalMixin):
         config.mm_related_params.vit_weights = Qwen3VLVitWeight(
             {"vit": self.mm_part.visual}
         )
+
+    def _create_python_model(self) -> Optional[GptModelBase]:
+        self.py_model = Qwen3VLModel(self.config, self.weight)
 
     @staticmethod
     def get_weight_cls():
