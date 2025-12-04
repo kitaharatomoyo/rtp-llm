@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, List
+from typing import Any, List, Optional
 
 import torch
 
@@ -18,6 +18,8 @@ from rtp_llm.models.qwen3_vl.qwen3_vl import (
 )
 from rtp_llm.models.qwen_v2_moe import Qwen2Moe
 from rtp_llm.models.qwen_v3_moe import Qwen3Moe, QWenV3MoeWeight
+from rtp_llm.models_py.model_desc.module_base import GptModelBase
+from rtp_llm.models_py.model_desc.qwen3vl_moe import Qwen3VLMoeModel
 from rtp_llm.utils.model_weight import (
     CkptWeightInfo,
     W,
@@ -108,6 +110,10 @@ class QWen3_VL_MOE(Qwen3Moe, MultiModalMixin):
         config.mm_related_params.vit_weights = Qwen3VLVitWeight(
             {"vit": self.mm_part.visual}
         )
+
+    def _create_python_model(self) -> Optional[GptModelBase]:
+        self.py_model = Qwen3VLMoeModel(self.config, self.weight)
+        return self.py_model
 
     @staticmethod
     def get_weight_cls():
