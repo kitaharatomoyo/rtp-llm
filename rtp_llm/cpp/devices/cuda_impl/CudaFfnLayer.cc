@@ -298,8 +298,6 @@ MoeGateSelectOutput CudaDevice::moeGateSelect(const FfnLayerParams& params) {
 
     const auto token_num = hidden.shape()[0];
 
-    forcePrintBufferData(hidden, "CudaDevice::moeGateSelect.hidden");
-
     // note: num_expert is real expert number, not including extra expert
     const auto num_expert = params.weights.moe_gating_weight->kernel->shape()[1];
     const auto top_k      = moe_conf.top_k;
@@ -310,8 +308,7 @@ MoeGateSelectOutput CudaDevice::moeGateSelect(const FfnLayerParams& params) {
                             nullptr,
                             DataType::TYPE_FP32,
                             DataType::TYPE_FP32});
-    forcePrintBufferData(*gate, "CudaDevice::moeGateSelect.gate");
-    BufferPtr moe_gating;
+    BufferPtr  moe_gating;
 
     const auto expert_scales = allocateBuffer({DataType::TYPE_FP32, {token_num, top_k}}, {"moe_expert_scale"});
     DataType   topk_t        = DataType::TYPE_INT32;
