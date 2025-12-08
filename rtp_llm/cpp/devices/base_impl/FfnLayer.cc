@@ -16,26 +16,32 @@ FfnLayerOutput DeviceBase::ffnLayer(const FfnLayerParams& params) {
     RUNTIME_ASSERT_OP_ARG(!params.residual, "default FFN implementation does not support residual!");
     BufferPtr output;
     BufferPtr moe_gating;
+    auto      checkNanIfEnabled = [&](const BufferPtr& buffer) {
+        if (initParams().profile_debug_logging_config.check_nan && buffer) {
+            (void)checkNAN(*buffer);
+        }
+    };
     if (params.weights.moe_gating_weight) {
         RUNTIME_ASSERT_OP_ARG(params.configs.moe_configs, "moe configs not set");
         auto moe_output = moeFfnLayer(params);
         output          = moe_output.hidden_states;
         moe_gating      = moe_output.moe_gating;
+        checkNanIfEnabled(output);
 
         auto shared_expert_output = moeSharedExpert(params).hidden_states;
-
+        checkNanIfEnabled(shared_expert_output);
         // for deep ep ll, the gather should be defered afater shared expert.
         if (moe_output.moe_combine_output) {
             moe_output.comm_barrier_hook->hook_sync();
             moe_output = gatherCombineOutput(moe_output.moe_combine_output.value());
             output     = moe_output.hidden_states;
         }
-
         printBufferData(*output, "moe_out_after_barrier");
         if (shared_expert_output) {
             // just add bias to output
             layernorm({output, nullptr, nullopt, mayGetRef(shared_expert_output)}).output;
         }
+        checkNanIfEnabled(output);
     } else {
         BufferPtr up_output;
         if (isGatedActivation(params.configs.activation_type)) {
@@ -93,6 +99,8 @@ FfnLayerOutput DeviceBase::ffnLayer(const FfnLayerParams& params) {
                 // syncAndCheck();
                 ffn_input_ptr = all_gather_output.all_gather_recv_buffer;
                 up_output     = all_gather_output.output;
+                checkNanIfEnabled(ffn_input_ptr);
+                checkNanIfEnabled(up_output);
                 printBufferData(*ffn_input_ptr, "ffn_ag_inter_output");
                 printBufferData(*up_output, "ffn_ag_final_output");
             } else {
@@ -104,6 +112,7 @@ FfnLayerOutput DeviceBase::ffnLayer(const FfnLayerParams& params) {
                                           DataType::TYPE_INVALID,
                                           params.compute_type);
                 up_output = loraLinear(LoraLinearParams(up_gemm_params, params.lora_input.up_lora_input)).output;
+                checkNanIfEnabled(up_output);
                 printBufferData(*up_output, "ffn_up");
             }
             printBufferData(*up_output, "ffn_up_gate");
@@ -124,6 +133,7 @@ FfnLayerOutput DeviceBase::ffnLayer(const FfnLayerParams& params) {
                                         act_output,
                                         true,
                                         params.qscheme});
+                checkNanIfEnabled(up_output);
             } else {
                 printBufferData(*up_output, "gate_up_output buffer");
                 torch::Tensor              gate_up_output_torch_tensor = Buffer2torchTensor(up_output, false);
@@ -138,8 +148,10 @@ FfnLayerOutput DeviceBase::ffnLayer(const FfnLayerParams& params) {
                             *gate_output,
                             std::nullopt,
                             mayGetRef(params.weights.act_scale)});
-
+                checkNanIfEnabled(gate_output);
+                checkNanIfEnabled(up_out);
                 up_output = std::move(up_out);
+                checkNanIfEnabled(up_output);
             }
         } else {
             RTP_LLM_CHECK_WITH_INFO(!params.enable_sp, "enable_sp is not supported for non-gated activation");
@@ -157,6 +169,7 @@ FfnLayerOutput DeviceBase::ffnLayer(const FfnLayerParams& params) {
                                                       std::nullopt,
                                                       mayGetRef(params.weights.act_scale));
             up_output               = loraLinearWithActivation({lora_linear_params, activation_params});
+            checkNanIfEnabled(up_output);
         }
 
         if (params.qscheme != QScheme::NoQuantize && params.qscheme != QScheme::Qfp8PerTokenBlock
@@ -181,6 +194,7 @@ FfnLayerOutput DeviceBase::ffnLayer(const FfnLayerParams& params) {
                         * (params.weights.intermediate_weight2_static_scale_reciprocal_weight->kernel) :
                     std::nullopt);
             up_output = quantize(quant_params);
+            checkNanIfEnabled(up_output);
         }
 
         printBufferData(*up_output, "ffn_act");
@@ -203,6 +217,8 @@ FfnLayerOutput DeviceBase::ffnLayer(const FfnLayerParams& params) {
             // syncAndCheck();
             gemm_output = reduce_scatter_output.reduce_scatter_recv_buffer;
             output      = reduce_scatter_output.output;
+            checkNanIfEnabled(gemm_output);
+            checkNanIfEnabled(output);
             printBufferData(*gemm_output, "ffn_rs_inter_output");
             printBufferData(*output, "ffn_rs_final_output");
         } else {
@@ -214,9 +230,12 @@ FfnLayerOutput DeviceBase::ffnLayer(const FfnLayerParams& params) {
                                                params.compute_type);
             down_gemm_params.qscheme = params.qscheme;
             output = loraLinear(LoraLinearParams(down_gemm_params, params.lora_input.down_lora_input)).output;
+            checkNanIfEnabled(output);
         }
     }
 
+    checkNanIfEnabled(output);
+    checkNanIfEnabled(moe_gating);
     printBufferData(*output, "ffn_out");
     if (moe_gating != nullptr) {
         printBufferData(*moe_gating, "moe_gating");
@@ -227,6 +246,12 @@ FfnLayerOutput DeviceBase::ffnLayer(const FfnLayerParams& params) {
 }
 
 FfnLayerOutput DeviceBase::epMoeFfnLayer(const FfnLayerParams& params, const MoeGateSelectOutput& gate_output) {
+
+    auto checkNanIfEnabled = [&](const BufferPtr& buffer) {
+        if (initParams().profile_debug_logging_config.check_nan && buffer) {
+            (void)checkNAN(*buffer);
+        }
+    };
     RUNTIME_ASSERT_OP_ARG(params.configs.moe_configs, "moe configs not set");
     const auto&       moe_conf          = params.configs.moe_configs.value();
     MoeDispatchOutput dispatched_output = epDispatch({params.input,
@@ -237,7 +262,8 @@ FfnLayerOutput DeviceBase::epMoeFfnLayer(const FfnLayerParams& params, const Moe
                                                       params.qscheme,
                                                       params.expert_stats});
     auto              hidden_states     = dispatched_output.hidden;
-    auto              moe_ffn_params =
+    checkNanIfEnabled(hidden_states);
+    auto moe_ffn_params =
         FfnLayerParams({*hidden_states, params.configs, params.weights, params.residual, params.qscheme});
     moe_ffn_params.expert_stats = params.expert_stats;
     hidden_states               = moeFfn(moe_ffn_params,
@@ -246,6 +272,7 @@ FfnLayerOutput DeviceBase::epMoeFfnLayer(const FfnLayerParams& params, const Moe
                                           nullptr,
                                           dispatched_output.deep_ep_ll_output})
                         .hidden_states;
+    checkNanIfEnabled(hidden_states);
     auto combine_out = epCombine({hidden_states,
                                   dispatched_output.indices,
                                   params.output,
@@ -261,10 +288,12 @@ FfnLayerOutput DeviceBase::epMoeFfnLayer(const FfnLayerParams& params, const Moe
                                   dispatched_output.expert_scales});
     // TODO(wangyin.yx): refact this defered combine.
     if (combine_out.comm_barrier_hook) {
+        checkNanIfEnabled(combine_out.all_output);
         return {combine_out.all_output, nullptr, combine_out.comm_barrier_hook, combine_out};
     } else {
         auto out = gatherCombineOutput(combine_out);
         printBufferData(*out.hidden_states, "moe_ffn_ep_out");
+        checkNanIfEnabled(out.hidden_states);
         return out;
     }
 }
@@ -274,23 +303,38 @@ FfnLayerOutput DeviceBase::moeFfnLayer(const FfnLayerParams& params) {
     const auto&         moe_conf    = params.configs.moe_configs.value();
     MoeGateSelectOutput gate_output = moeGateSelect(params);
     FfnLayerOutput      output;
+    auto                checkNanIfEnabled = [&](const BufferPtr& buffer) {
+        if (initParams().profile_debug_logging_config.check_nan && buffer) {
+            (void)checkNAN(*buffer);
+        }
+    };
+    checkNanIfEnabled(gate_output.expert_scales);
+    checkNanIfEnabled(gate_output.moe_gating);
     if (moe_conf.ep_size > 1 && !moe_conf.use_all_gather) {
         output = epMoeFfnLayer(params, gate_output);
+        checkNanIfEnabled(output.hidden_states);
     } else {
         output = moeFfn(params, gate_output);
+        checkNanIfEnabled(output.hidden_states);
     }
     output.moe_gating = std::move(gate_output.moe_gating);
     return output;
 }
 
 FfnLayerOutput DeviceBase::moeSharedExpert(const FfnLayerParams& params) {
+    auto checkNanIfEnabled = [&](const BufferPtr& buffer) {
+        if (initParams().profile_debug_logging_config.check_nan && buffer) {
+            (void)checkNAN(*buffer);
+        }
+    };
     if (params.weights.shared_expert) {
         RUNTIME_ASSERT_OP_ARG(params.configs.moe_configs, "moe configs not set");
         const auto& moe_conf = params.configs.moe_configs.value();
         BufferPtr   shared_expert_output =
             (moe_conf.tp_size > 1) ? allocateBufferLike({params.input}, AllocationType::DEVICE, {"shared_expert_buf"}) :
                                        nullptr;
-        shared_expert_output  = prepareAllReduce({std::move(shared_expert_output), ReduceOp::Sum}).buffer;
+        shared_expert_output = prepareAllReduce({std::move(shared_expert_output), ReduceOp::Sum}).buffer;
+        checkNanIfEnabled(shared_expert_output);
         auto ffn_params       = FfnLayerParams({params.input,
                                                 params.configs,
                                                 *(params.weights.shared_expert),
@@ -301,6 +345,7 @@ FfnLayerOutput DeviceBase::moeSharedExpert(const FfnLayerParams& params) {
         ffn_params.lora_input = params.lora_input;
         shared_expert_output  = ffnLayer(ffn_params).hidden_states;
 
+        checkNanIfEnabled(shared_expert_output);
         // for qwen moe
         // See
         // https://github.com/huggingface/transformers/blob/0f67ba1d741d65b07d549daf4ee157609ce4f9c1/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L803
@@ -309,11 +354,13 @@ FfnLayerOutput DeviceBase::moeSharedExpert(const FfnLayerParams& params) {
             activation({ActivationType::Sigmoid, shared_gate});
             shared_expert_output =
                 multiply({shared_gate->reshape({shared_gate->size()}), *shared_expert_output, shared_expert_output});
+            checkNanIfEnabled(shared_expert_output);
         }
         if (moe_conf.tp_size > 1 && !moe_conf.use_all_gather) {
             auto wrapper = DevicePerfWrapper(
                 this, "shared_expert_all_reduce, sizeBytes=%ld", (long)shared_expert_output->sizeBytes());
             shared_expert_output = allReduce({shared_expert_output, ReduceOp::Sum}).buffer;
+            checkNanIfEnabled(shared_expert_output);
         }
         return {shared_expert_output};
     } else {

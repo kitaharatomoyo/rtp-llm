@@ -35,6 +35,11 @@ void hackMoeExpert(const MoeDispatchParams& params, BufferPtr& experts_ids_host)
 }
 
 MoeDispatchOutput CudaDevice::epDispatch(const MoeDispatchParams& params) {
+    auto checkNanIfEnabled = [&](const BufferPtr& buffer) {
+        if (initParams().profile_debug_logging_config.check_nan && buffer) {
+            (void)checkNAN(*buffer);
+        }
+    };
     DevicePerfWrapper wrapper(this, "epDispatch");
     if (init_params_.use_deepep_moe) {
         if (init_params_.use_deepep_low_latency) {
@@ -152,7 +157,8 @@ MoeDispatchOutput CudaDevice::epDispatch(const MoeDispatchParams& params) {
             std::move(BufferPtr(new Buffer(MemoryType::MEMORY_GPU, DataType::TYPE_INVALID, {0}, nullptr)))));
 
         updateExpertGpuLoads(moe_conf, params.expert_stats, global_buffers[2]);
-
+        checkNanIfEnabled(hidden_fp8_out);
+        checkNanIfEnabled(global_buffers[3]);
         return {hidden_fp8_out,
                 global_buffers[2],
                 global_buffers[3],
@@ -165,7 +171,8 @@ MoeDispatchOutput CudaDevice::epDispatch(const MoeDispatchParams& params) {
                 move(all2all_output.comm_barrier_hook)};
     } else {
         updateExpertGpuLoads(moe_conf, params.expert_stats, global_buffers[1]);
-
+        checkNanIfEnabled(global_buffers[0]);
+        checkNanIfEnabled(global_buffers[2]);
         return {global_buffers[0],
                 global_buffers[1],
                 global_buffers[2],
@@ -198,6 +205,11 @@ MoeCombineOutput CudaDevice::epCombine(const MoeCombineParams& params) {
 }
 
 FfnLayerOutput CudaDevice::gatherCombineOutput(const MoeCombineOutput& combine_outputs) {
+    auto checkNanIfEnabled = [&](const BufferPtr& buffer) {
+        if (initParams().profile_debug_logging_config.check_nan && buffer) {
+            (void)checkNAN(*buffer);
+        }
+    };
     auto&       all_output     = combine_outputs.all_output;
     auto        scatter_output = combine_outputs.scatter_output;
     const auto& params         = combine_outputs.params;
@@ -270,8 +282,10 @@ FfnLayerOutput CudaDevice::gatherCombineOutput(const MoeCombineOutput& combine_o
                                                  stream_);
             }
             printBufferData(*output, "scatter_add_output");
+            checkNanIfEnabled(output);
             return {output};
         } else {
+            checkNanIfEnabled(all_output);
             return {all_output};
         }
     }
@@ -284,6 +298,8 @@ MoeGateSelectOutput CudaDevice::moeGateSelect(const FfnLayerParams& params) {
 
     const auto token_num = hidden.shape()[0];
 
+    forcePrintBufferData(hidden, "CudaDevice::moeGateSelect.hidden");
+
     // note: num_expert is real expert number, not including extra expert
     const auto num_expert = params.weights.moe_gating_weight->kernel->shape()[1];
     const auto top_k      = moe_conf.top_k;
@@ -294,7 +310,8 @@ MoeGateSelectOutput CudaDevice::moeGateSelect(const FfnLayerParams& params) {
                             nullptr,
                             DataType::TYPE_FP32,
                             DataType::TYPE_FP32});
-    BufferPtr  moe_gating;
+    forcePrintBufferData(*gate, "CudaDevice::moeGateSelect.gate");
+    BufferPtr moe_gating;
 
     const auto expert_scales = allocateBuffer({DataType::TYPE_FP32, {token_num, top_k}}, {"moe_expert_scale"});
     DataType   topk_t        = DataType::TYPE_INT32;
