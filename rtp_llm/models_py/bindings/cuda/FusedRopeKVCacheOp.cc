@@ -205,6 +205,8 @@ torch::Tensor FusedRopeKVCacheDecodeOp::forward(const torch::Tensor&            
     int* position_ids_ptr = nullptr;
     if (position_ids.has_value() && position_ids.value().defined() && position_ids.value().numel() > 0) {
         position_ids_ptr = position_ids.value().data_ptr<int>();
+    } else {
+        position_ids_ptr = params->sequence_lengths.data_ptr<int>();
     }
 
     RTP_LLM_CHECK_WITH_INFO(params->sequence_lengths.is_pinned(), "sequence_lengths is not pinned memory");

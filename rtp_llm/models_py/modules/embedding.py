@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -25,9 +27,9 @@ class Embedding(nn.Module):
     def forward(
         self,
         input: torch.Tensor,
-        position_ids: torch.Tensor,
-        token_types: torch.Tensor,
-        text_tokens_mask: torch.Tensor,
+        position_ids: Optional[torch.Tensor] = None,
+        token_types: Optional[torch.Tensor] = None,
+        text_tokens_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         tokens = input.size(0)
         hidden_size = self.weight.size(-1)
