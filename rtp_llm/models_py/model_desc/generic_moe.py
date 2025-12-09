@@ -355,12 +355,7 @@ class GenericMoeModel(GptModelBase):
 
     def forward(self, inputs: PyModelInputs) -> PyModelOutputs:
         input_ids: torch.Tensor = inputs.input_ids
-        position_ids = inputs.attention_inputs.combo_position_ids
-        token_type_ids = inputs.attention_inputs.combo_tokens_type_ids
-        text_tokens_mask = inputs.attention_inputs.text_tokens_mask
-        inputs_embeds = self.embed_tokens(
-            input_ids, position_ids, token_type_ids, text_tokens_mask
-        )
+        inputs_embeds = self.embed_tokens(input_ids)
         hidden_states = inputs_embeds
         attention_inputs: PyAttentionInputs = inputs.attention_inputs
         position_ids = attention_inputs.combo_position_ids
