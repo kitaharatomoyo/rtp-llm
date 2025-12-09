@@ -40,7 +40,7 @@ TRTAttnPtr FusedRopeKVCachePrefillOp::prepare(torch_ext::PyAttentionInputs attn_
 }
 
 torch::Tensor FusedRopeKVCachePrefillOp::forward(const torch::Tensor&              qkv,
-                                                 const torch::Tensor&              position_ids,
+                                                 std::optional<torch::Tensor>      position_ids,
                                                  FMHAType                          fmha_type,
                                                  std::optional<torch_ext::KVCache> kv_cache,
                                                  const TRTAttnPtr&                 params) {
@@ -94,8 +94,8 @@ torch::Tensor FusedRopeKVCachePrefillOp::forward(const torch::Tensor&           
     // tmp not use qkv fp8 buffer
     bool use_qkv_fp8      = false;
     int* position_ids_ptr = nullptr;
-    if (position_ids.defined() && position_ids.numel() > 0) {
-        position_ids_ptr = position_ids.data_ptr<int>();
+    if (position_ids.has_value() && position_ids.value().defined() && position_ids.value().numel() > 0) {
+        position_ids_ptr = position_ids.value().data_ptr<int>();
     }
     DISPATCH_CUDA_FUNCTION_DATA_TYPE(
         torchDTypeToDataType(qkv.dtype()),
@@ -174,7 +174,7 @@ TRTAttnPtr FusedRopeKVCacheDecodeOp::prepare(torch_ext::PyAttentionInputs attn_i
 static std::once_flag rope_cache_flag;
 
 torch::Tensor FusedRopeKVCacheDecodeOp::forward(const torch::Tensor&              qkv,
-                                                const torch::Tensor&              position_ids,
+                                                std::optional<torch::Tensor>      position_ids,
                                                 FMHAType                          fmha_type,
                                                 std::optional<torch_ext::KVCache> kv_cache,
                                                 const TRTAttnPtr&                 params) {
@@ -203,8 +203,8 @@ torch::Tensor FusedRopeKVCacheDecodeOp::forward(const torch::Tensor&            
     });
 
     int* position_ids_ptr = nullptr;
-    if (position_ids.defined() && position_ids.numel() > 0) {
-        position_ids_ptr = position_ids.data_ptr<int>();
+    if (position_ids.has_value() && position_ids.value().defined() && position_ids.value().numel() > 0) {
+        position_ids_ptr = position_ids.value().data_ptr<int>();
     }
 
     RTP_LLM_CHECK_WITH_INFO(params->sequence_lengths.is_pinned(), "sequence_lengths is not pinned memory");
@@ -241,7 +241,7 @@ void registerFusedRopeKVCacheOp(const py::module& m) {
         .def("forward",
              &FusedRopeKVCachePrefillOp::forward,
              py::arg("qkv"),
-             py::arg("position_ids"),
+             py::arg("position_ids") = py::none(),
              py::arg("fmha_type"),
              py::arg("kv_cache"),
              py::arg("params"));
@@ -252,7 +252,7 @@ void registerFusedRopeKVCacheOp(const py::module& m) {
         .def("forward",
              &FusedRopeKVCacheDecodeOp::forward,
              py::arg("qkv"),
-             py::arg("position_ids"),
+             py::arg("position_ids") = py::none(),
              py::arg("fmha_type"),
              py::arg("kv_cache"),
              py::arg("params"));

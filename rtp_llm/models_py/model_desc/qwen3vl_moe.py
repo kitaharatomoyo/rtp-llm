@@ -96,8 +96,4 @@ class Qwen3VLMoeModel(GptModelBase):
         return PyModelOutputs(hidden_states, fmha_impl.fmha_params)
 
 
-__all__ = [
-    "GenericMoeLayer",
-    "GenericMoeDecoderLayer",
-    "GenericMoeModel",
-]
+__all__ = ["Qwen3VLMoeModel"]
