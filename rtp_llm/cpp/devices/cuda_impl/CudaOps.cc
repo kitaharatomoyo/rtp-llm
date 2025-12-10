@@ -650,7 +650,7 @@ AllToAllOutput CudaDevice::allToAll(const AllToAllParams& params) {
     auto checkAllToAll                  = my_get_env("CHECK_ALLTOALL", "false");
     auto checkNanAndSaveTensorIfEnabled = [&](const BufferPtr&              buffer_to_check,
                                               const std::vector<BufferPtr>& buffers_to_save) {
-        if (initParams().profile_debug_logging_config.check_nan && buffer_to_check && checkAllToAll != "false") {
+        if (buffer_to_check && checkAllToAll != "false") {
             std::string dir       = my_get_env("HIPPO_APP_INST_ROOT");
             std::string file_path = dir + "/" + random_string(10) + "saved_tensors.pt";
             my_check_cuda_value(cudaStreamSynchronize(stream_), buffers_to_save, file_path);
@@ -795,7 +795,7 @@ AllToAllOutput CudaDevice::allToAll(const AllToAllParams& params) {
         all_to_all_output = {{output}};
         if (params.buffers.size() == 1 && (params.input_split_sizes.size() || params.output_split_sizes.size())) {
             std::vector<BufferPtr> buffers_to_save = params.buffers;
-            buffers_to_save.push_back(output);
+            // buffers_to_save.push_back(output);
             checkNanAndSaveTensorIfEnabled(output, buffers_to_save);
         }
     } else {
