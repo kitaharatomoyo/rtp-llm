@@ -627,6 +627,11 @@ void my_check_cuda_value(bool                          should_throw,
     RTP_LLM_LOG_INFO("my_check_cuda_value");
     if (should_throw) {
         RTP_LLM_LOG_INFO("should_throw vvv");
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            RTP_LLM_LOG_WARNING("CUDA error state cleared before save: %s", cudaGetErrorString(err));
+        }
+
         std::vector<torch::Tensor> tensors_to_save;
         for (const auto& buffer : buffers_to_save) {
             tensors_to_save.emplace_back(Buffer2torchTensor(buffer, false));
