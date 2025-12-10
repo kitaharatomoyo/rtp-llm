@@ -623,13 +623,20 @@ std::string random_string(size_t length) {
 
 void my_check_cuda_value(bool                          should_throw,
                          const std::vector<BufferPtr>& buffers_to_save,
-                         const std::string&            file_path) {
+                         const std::string&            file_path,
+                         const AllToAllParams&         params) {
     RTP_LLM_LOG_INFO("my_check_cuda_value");
     if (should_throw) {
         RTP_LLM_LOG_INFO("should_throw vvv");
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
             RTP_LLM_LOG_WARNING("CUDA error state cleared before save: %s", cudaGetErrorString(err));
+        }
+        for (auto i = 0; i < params.input_split_sizes.size(); ++i) {
+            RTP_LLM_LOG_INFO("input_split_sizes[%d]: %d", i, (int)params.input_split_sizes[i]);
+        }
+        for (auto i = 0; i < params.output_split_sizes.size(); ++i) {
+            RTP_LLM_LOG_INFO("output_split_sizes[%d]: %d", i, (int)params.output_split_sizes[i]);
         }
 
         std::vector<torch::Tensor> tensors_to_save;
@@ -649,27 +656,23 @@ inline std::string my_get_env(const std::string& name, const std::string& defaul
 AllToAllOutput CudaDevice::allToAll(const AllToAllParams& params) {
     auto checkAllToAll                  = my_get_env("CHECK_ALLTOALL", "false");
     auto checkNanAndSaveTensorIfEnabled = [&](const BufferPtr&              buffer_to_check,
-                                              const std::vector<BufferPtr>& buffers_to_save) {
+                                              const std::vector<BufferPtr>& buffers_to_save,
+                                              const AllToAllParams&         params) {
         if (buffer_to_check && checkAllToAll != "false") {
             std::string dir       = my_get_env("HIPPO_APP_INST_ROOT");
             std::string file_path = dir + "/" + random_string(10) + "saved_tensors.pt";
-            my_check_cuda_value(cudaStreamSynchronize(stream_), buffers_to_save, file_path);
-            my_check_cuda_value(cudaGetLastError(), buffers_to_save, file_path);
+            my_check_cuda_value(cudaStreamSynchronize(stream_), buffers_to_save, file_path, params);
+            my_check_cuda_value(cudaGetLastError(), buffers_to_save, file_path, params);
             DISPATCH_CUDA_FUNCTION_DATA_TYPE(
                 buffer_to_check->type(), invokeCheckNAN, buffer_to_check->data(), buffer_to_check->size(), stream_);
-            my_check_cuda_value(cudaStreamSynchronize(stream_), buffers_to_save, file_path);
-            my_check_cuda_value(cudaGetLastError(), buffers_to_save, file_path);
+            my_check_cuda_value(cudaStreamSynchronize(stream_), buffers_to_save, file_path, params);
+            my_check_cuda_value(cudaGetLastError(), buffers_to_save, file_path, params);
 
             // test check nan
             // my_check_cuda_value(true, buffers_to_save, file_path);
         }
     };
 
-    // auto checkNanIfEnabled = [&](const BufferPtr& buffer) {
-    //     if (initParams().profile_debug_logging_config.check_nan && buffer) {
-    //         (void)checkNAN(*buffer);
-    //     }
-    // };
     RTP_LLM_CHECK_WITH_INFO(params.mode == ParallelMode::DP_AND_TP,
                             "all to all just support ParallelMode::DP_AND_TP but got [%d]",
                             params.mode);
@@ -790,13 +793,17 @@ AllToAllOutput CudaDevice::allToAll(const AllToAllParams& params) {
     AllToAllOutput all_to_all_output;
     if (byte_buffers.size() < 2) {
         vector<size_t> new_shape = output->shape();
+        RTP_LLM_CHECK_WITH_INFO(new_shape[1] % getTypeSize(params.buffers[0]->type()) == 0,
+                                "new_shape[1] [%d] must be divisible by type size [%d]",
+                                new_shape[1],
+                                (int)getTypeSize(params.buffers[0]->type()));
         new_shape[1] /= getTypeSize(params.buffers[0]->type());
         output->updateTypeAndShape(params.buffers[0]->type(), new_shape);
         all_to_all_output = {{output}};
         if (params.buffers.size() == 1 && (params.input_split_sizes.size() || params.output_split_sizes.size())) {
             std::vector<BufferPtr> buffers_to_save = params.buffers;
             // buffers_to_save.push_back(output);
-            checkNanAndSaveTensorIfEnabled(output, buffers_to_save);
+            checkNanAndSaveTensorIfEnabled(output, buffers_to_save, params);
         }
     } else {
         vector<BufferPtr> outputs;
