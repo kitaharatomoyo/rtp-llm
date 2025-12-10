@@ -607,7 +607,63 @@ void CudaDevice::profileStop() {
     check_cuda_value(cudaProfilerStop());
 }
 
+std::string random_string(size_t length) {
+    const std::string               chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    std::random_device              rd;
+    std::mt19937                    gen(rd());
+    std::uniform_int_distribution<> dis(0, chars.size() - 1);
+
+    std::string str;
+    str.reserve(length);
+    for (size_t i = 0; i < length; ++i) {
+        str += chars[dis(gen)];
+    }
+    return str;
+}
+
+void my_check_cuda_value(bool                          should_throw,
+                         const std::vector<BufferPtr>& buffers_to_save,
+                         const std::string&            file_path) {
+    RTP_LLM_LOG_INFO("my_check_cuda_value");
+    if (should_throw) {
+        RTP_LLM_LOG_INFO("should_throw vvv");
+        std::vector<torch::Tensor> tensors_to_save;
+        for (const auto& buffer : buffers_to_save) {
+            tensors_to_save.emplace_back(Buffer2torchTensor(buffer, false));
+        }
+        torch::save(tensors_to_save, file_path.c_str());
+        throw std::runtime_error("CUDA error: " + file_path);
+    }
+}
+
+inline std::string my_get_env(const std::string& name, const std::string& default_val = "") {
+    const char* val = std::getenv(name.c_str());
+    return val ? std::string(val) : default_val;
+}
+
 AllToAllOutput CudaDevice::allToAll(const AllToAllParams& params) {
+    auto checkNanAndSaveTensorIfEnabled = [&](const BufferPtr&              buffer_to_check,
+                                              const std::vector<BufferPtr>& buffers_to_save) {
+        if (initParams().profile_debug_logging_config.check_nan && buffer_to_check) {
+            std::string dir       = my_get_env("HIPPO_APP_INST_ROOT");
+            std::string file_path = dir + "/" + random_string(10) + "saved_tensors.pt";
+            my_check_cuda_value(cudaStreamSynchronize(stream_), buffers_to_save, file_path);
+            my_check_cuda_value(cudaGetLastError(), buffers_to_save, file_path);
+            DISPATCH_CUDA_FUNCTION_DATA_TYPE(
+                buffer_to_check->type(), invokeCheckNAN, buffer_to_check->data(), buffer_to_check->size(), stream_);
+            my_check_cuda_value(cudaStreamSynchronize(stream_), buffers_to_save, file_path);
+            my_check_cuda_value(cudaGetLastError(), buffers_to_save, file_path);
+
+            // test check nan
+            // my_check_cuda_value(true, tensors_to_save, file_path);
+        }
+    };
+
+    // auto checkNanIfEnabled = [&](const BufferPtr& buffer) {
+    //     if (initParams().profile_debug_logging_config.check_nan && buffer) {
+    //         (void)checkNAN(*buffer);
+    //     }
+    // };
     RTP_LLM_CHECK_WITH_INFO(params.mode == ParallelMode::DP_AND_TP,
                             "all to all just support ParallelMode::DP_AND_TP but got [%d]",
                             params.mode);
@@ -715,6 +771,7 @@ AllToAllOutput CudaDevice::allToAll(const AllToAllParams& params) {
                                      getNcclDataType(output->type()),
                                      nccl_param.nccl_comm_,
                                      stream);
+
     } else {
         RTP_LLM_CHECK_WITH_INFO(input_buffer->shape()[0] % world_size == 0,
                                 "all2all_single_equal_split batch size [%d] must divide world size [%d]",
@@ -730,6 +787,11 @@ AllToAllOutput CudaDevice::allToAll(const AllToAllParams& params) {
         new_shape[1] /= getTypeSize(params.buffers[0]->type());
         output->updateTypeAndShape(params.buffers[0]->type(), new_shape);
         all_to_all_output = {{output}};
+        if (params.buffers.size() == 1 && (params.input_split_sizes.size() || params.output_split_sizes.size())) {
+            std::vector<BufferPtr> buffers_to_save = params.buffers;
+            buffers_to_save.push_back(output);
+            checkNanAndSaveTensorIfEnabled(output, buffers_to_save);
+        }
     } else {
         vector<BufferPtr> outputs;
         size_t            output_batch_size = output->shape()[0];
