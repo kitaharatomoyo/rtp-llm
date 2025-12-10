@@ -644,6 +644,7 @@ void my_check_cuda_value(bool                          should_throw,
             tensors_to_save.emplace_back(Buffer2torchTensor(buffer, false));
         }
         torch::save(tensors_to_save, file_path.c_str());
+        std::this_thread::sleep_for(std::chrono::seconds(10));
         throw std::runtime_error("CUDA error: " + file_path);
     }
 }
