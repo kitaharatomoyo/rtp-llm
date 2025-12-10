@@ -79,6 +79,7 @@ private:
     bool                                   enable_cuda_graph_{false};
     bool                                   is_prefill_cuda_graph_mode_{false};
     int                                    concurrency_limit_{32};
+    int                                    position_id_len_factor_{8};
     at::cuda::CUDAStream                   capture_stream_;
     bool                                   enable_cuda_graph_debug_mode_{false};
     int                                    hidden_size_;
