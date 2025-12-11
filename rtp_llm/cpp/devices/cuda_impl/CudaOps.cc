@@ -663,6 +663,18 @@ inline std::string my_get_env(const std::string& name, const std::string& defaul
 }
 
 AllToAllOutput CudaDevice::allToAll(const AllToAllParams& params) {
+    RTP_LLM_LOG_INFO("wwww start alltoall");
+    {
+        std::ostringstream oss;
+        oss << "buffers: ";
+        for (size_t i = 0; i < params.buffers.size(); ++i) {
+            if (i > 0)
+                oss << ", ";
+            oss << "buffer[" << i << "]: ";
+            oss << params.buffers[i]->debugString().c_str();
+        }
+        RTP_LLM_LOG_INFO("wwww before real all2all, %s", oss.str().c_str());
+    }
     auto checkAllToAll                  = my_get_env("CHECK_ALLTOALL", "false");
     auto checkNanAndSaveTensorIfEnabled = [&](const BufferPtr&              buffer_to_check,
                                               const std::vector<BufferPtr>& buffers_to_save,
@@ -794,7 +806,7 @@ AllToAllOutput CudaDevice::allToAll(const AllToAllParams& params) {
             oss << params.output_split_sizes[i];
         }
         oss << "]";
-        RTP_LLM_LOG_INFO("vvv before all2all, %s", oss.str().c_str());
+        RTP_LLM_LOG_INFO("wwww before real all2all, %s", oss.str().c_str());
         all2all_single_unequal_split(input_buffer->data(),
                                      send_lengths.data(),
                                      send_offsets.data(),
