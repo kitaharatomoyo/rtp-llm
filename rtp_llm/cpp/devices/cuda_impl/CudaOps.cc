@@ -632,13 +632,21 @@ void my_check_cuda_value(bool                          should_throw,
         if (err != cudaSuccess) {
             RTP_LLM_LOG_WARNING("CUDA error state cleared before save: %s", cudaGetErrorString(err));
         }
-        for (auto i = 0; i < params.input_split_sizes.size(); ++i) {
-            RTP_LLM_LOG_INFO("input_split_sizes[%d]: %d", i, (int)params.input_split_sizes[i]);
+        std::ostringstream oss;
+        oss << "input_split_sizes: [";
+        for (size_t i = 0; i < params.input_split_sizes.size(); ++i) {
+            if (i > 0)
+                oss << ", ";
+            oss << params.input_split_sizes[i];
         }
-        for (auto i = 0; i < params.output_split_sizes.size(); ++i) {
-            RTP_LLM_LOG_INFO("output_split_sizes[%d]: %d", i, (int)params.output_split_sizes[i]);
+        oss << "], output_split_sizes: [";
+        for (size_t i = 0; i < params.output_split_sizes.size(); ++i) {
+            if (i > 0)
+                oss << ", ";
+            oss << params.output_split_sizes[i];
         }
-
+        oss << "]";
+        RTP_LLM_LOG_INFO("vvv my_check_cuda_value, %s", oss.str().c_str());
         std::vector<torch::Tensor> tensors_to_save;
         for (const auto& buffer : buffers_to_save) {
             tensors_to_save.emplace_back(Buffer2torchTensor(buffer, false));
@@ -771,6 +779,22 @@ AllToAllOutput CudaDevice::allToAll(const AllToAllParams& params) {
         std::vector<size_t> recv_offsets(world_size);
         computeLengthsAndOffsets(params.input_split_sizes, *input_buffer, &send_lengths, &send_offsets);
         computeLengthsAndOffsets(params.output_split_sizes, *output, &recv_lengths, &recv_offsets);
+
+        std::ostringstream oss;
+        oss << "input_split_sizes: [";
+        for (size_t i = 0; i < params.input_split_sizes.size(); ++i) {
+            if (i > 0)
+                oss << ", ";
+            oss << params.input_split_sizes[i];
+        }
+        oss << "], output_split_sizes: [";
+        for (size_t i = 0; i < params.output_split_sizes.size(); ++i) {
+            if (i > 0)
+                oss << ", ";
+            oss << params.output_split_sizes[i];
+        }
+        oss << "]";
+        RTP_LLM_LOG_INFO("vvv before all2all, %s", oss.str().c_str());
         all2all_single_unequal_split(input_buffer->data(),
                                      send_lengths.data(),
                                      send_offsets.data(),
@@ -800,12 +824,12 @@ AllToAllOutput CudaDevice::allToAll(const AllToAllParams& params) {
                                 (int)getTypeSize(params.buffers[0]->type()));
         new_shape[1] /= getTypeSize(params.buffers[0]->type());
         output->updateTypeAndShape(params.buffers[0]->type(), new_shape);
-        all_to_all_output = {{output}};
         if (params.buffers.size() == 1 && (params.input_split_sizes.size() || params.output_split_sizes.size())) {
             std::vector<BufferPtr> buffers_to_save = params.buffers;
             // buffers_to_save.push_back(output);
             checkNanAndSaveTensorIfEnabled(output, buffers_to_save, params);
         }
+        all_to_all_output = {{output}};
     } else {
         vector<BufferPtr> outputs;
         size_t            output_batch_size = output->shape()[0];
