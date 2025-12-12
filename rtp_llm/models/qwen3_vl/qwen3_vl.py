@@ -48,6 +48,7 @@ class Qwen3_VLImageEmbedding(Qwen2_5_VLImageEmbedding):
     def preprocess_input(
         mm_inputs: List[MultimodalInput],
         processor,
+        factor: int = 32,
     ):
         assert len(mm_inputs) == 1
         mm_input = mm_inputs[0]
@@ -58,6 +59,7 @@ class Qwen3_VLImageEmbedding(Qwen2_5_VLImageEmbedding):
                 resized_height, resized_width = smart_resize(
                     mm_input.config.height,
                     mm_input.config.width,
+                    factor=factor,
                 )
                 image = image.resize((resized_width, resized_height))
             elif mm_input.config.max_pixels != -1 or mm_input.config.min_pixels != -1:
@@ -75,14 +77,18 @@ class Qwen3_VLImageEmbedding(Qwen2_5_VLImageEmbedding):
                 resized_height, resized_width = smart_resize(
                     height,
                     width,
+                    factor=factor,
                     min_pixels=min_pixels,
                     max_pixels=max_pixels,
                 )
                 image = image.resize((resized_width, resized_height))
-            res = processor.image_processor(image, return_tensors="pt")
+            print(image.size)
+            res = processor.image_processor(image, return_tensors="pt", do_resize=False)
             return res["pixel_values"], res["image_grid_thw"]
         elif mm_type == MMUrlType.VIDEO:
-            res = processor.video_processor(mm_input.url, return_tensors="pt")
+            res = processor.video_processor(
+                mm_input.url, return_tensors="pt", do_resize=False
+            )
             return res["pixel_values_videos"], res["video_grid_thw"]
         else:
             raise Exception("unknown mm url type")
@@ -90,6 +96,7 @@ class Qwen3_VLImageEmbedding(Qwen2_5_VLImageEmbedding):
     def get_preprocess_params(self):
         return {
             "processor": self.mm_processor,
+            "factor": self.spatial_merge_size * self.visual.patch_size,
         }
 
     @torch.inference_mode()
