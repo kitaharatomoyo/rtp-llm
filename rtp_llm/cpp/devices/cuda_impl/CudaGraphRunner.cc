@@ -91,6 +91,14 @@ void CudaGraphRunner::prepareInputs(PyModelInputs& inputs) {
                       py_model_inputs_.attention_inputs.sequence_lengths,
                       state_.current_batch_size * sizeof(int));
 
+        // Only copy combo_position_ids if it has valid storage
+        if (inputs.attention_inputs.combo_position_ids.defined()
+            && inputs.attention_inputs.combo_position_ids.numel() > 0
+            && inputs.attention_inputs.combo_position_ids.has_storage()) {
+            optimizedCopy(inputs.attention_inputs.combo_position_ids,
+                          py_model_inputs_.attention_inputs.combo_position_ids,
+                          inputs.attention_inputs.combo_position_ids.size(0) * sizeof(int));
+        }
         copySmallerIntoLarger(inputs.attention_inputs.kv_cache_block_id_device,
                               py_model_inputs_.attention_inputs.kv_cache_block_id_device);
 
@@ -236,6 +244,9 @@ void CudaGraphRunner::initCaptureAttentionInputs(PyModelInputs& inputs, int max_
     // sequence_length should in pinned memory
     inputs.attention_inputs.sequence_lengths = torch::ones({int(max_bs_)}, options_cpu_int32_);
     inputs.attention_inputs.sequence_lengths = inputs.attention_inputs.sequence_lengths.pin_memory();
+    inputs.attention_inputs.combo_position_ids =
+        torch::ones({int(max_bs_) * position_id_len_factor_}, options_cpu_int32_);
+    inputs.attention_inputs.combo_position_ids = inputs.attention_inputs.combo_position_ids.pin_memory();
     // kv_cache_block_id_device [batch_size, block_num]
     inputs.attention_inputs.kv_cache_block_id_device = torch::zeros(
         {int(max_bs_), ((max_seq_len_ + seq_size_per_block_ - 1) / seq_size_per_block_)}, options_cuda_int32_);
@@ -436,6 +447,9 @@ void CudaGraphRunner::prepareCaptureInputs(PyModelInputs& inputs, int batch_size
     // Common slice operations for attention inputs
     inputs.attention_inputs.sequence_lengths =
         capture_mem_hold_.py_model_inputs_.attention_inputs.sequence_lengths.slice(0, 0, batch_size);
+    inputs.attention_inputs.combo_position_ids =
+        capture_mem_hold_.py_model_inputs_.attention_inputs.combo_position_ids.slice(
+            0, 0, batch_size * position_id_len_factor_);
     inputs.attention_inputs.kv_cache_block_id_device =
         capture_mem_hold_.py_model_inputs_.attention_inputs.kv_cache_block_id_device.slice(0, 0, batch_size);
     inputs.attention_inputs.kv_cache_block_id_host =

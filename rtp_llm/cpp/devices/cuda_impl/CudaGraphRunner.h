@@ -102,6 +102,7 @@ private:
     py::object           py_fill_params_method_;
     bool                 enable_cuda_graph_{false};
     bool                 is_prefill_cuda_graph_mode_{false};
+    int                  position_id_len_factor_{8};
     at::cuda::CUDAStream capture_stream_;
     bool                 enable_cuda_graph_debug_mode_{false};
     size_t               max_bs_{1};
