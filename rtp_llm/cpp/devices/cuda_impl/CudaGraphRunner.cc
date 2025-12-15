@@ -169,7 +169,7 @@ PyModelOutputs CudaGraphRunner::forward(PyModelInputs& inputs) {
         }
         RTP_LLM_LOG_INFO("Replay End");
     } else {
-        RTP_LLM_LOG_INFO("Normal Cuda Graph Start");
+        RTP_LLM_LOG_DEBUG("Normal Cuda Graph Start");
         auto py_outputs_obj = normalForward(inputs);
         // Cast the Python object to PyModelOutputs and extract hidden states
         outputs = py_outputs_obj.cast<PyModelOutputs>();
