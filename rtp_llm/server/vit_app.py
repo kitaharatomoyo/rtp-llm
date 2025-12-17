@@ -143,7 +143,7 @@ class VitEndpointServer:
 
     def stop(self):
         if self.rpc_server is not None:
-            self.rpc_server.stop()
+            self.rpc_server.stop(grace=None)
         if self.mm_rpc_server is not None:
             self.mm_rpc_server.stop()
 
