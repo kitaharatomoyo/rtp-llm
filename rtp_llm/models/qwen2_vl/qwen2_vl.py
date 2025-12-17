@@ -255,7 +255,6 @@ class QWen2_VL(QWen_VL, MultiModalMixin):
         QWen2_VL._from_hf(config, config_json)
         QWen2_VL._load_vit_param(config, config_json)
         config.mm_related_params.config["ckpt_path"] = ckpt_path
-
         return config
 
     @staticmethod

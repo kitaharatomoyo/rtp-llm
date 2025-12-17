@@ -212,6 +212,8 @@ class WorkerInfo(object):
         cache_store_rdma_listen_port: int,
         cache_store_rdma_connect_port: int,
         backend_server_port: int,
+        vit_http_server_port: int,
+        vit_grpc_server_port: int,
         local_rank: int,
         world_rank: int,
         name: str,
@@ -229,6 +231,8 @@ class WorkerInfo(object):
         self.cache_store_rdma_listen_port = cache_store_rdma_listen_port
         self.cache_store_rdma_connect_port = cache_store_rdma_connect_port
         self.backend_server_port = backend_server_port
+        self.vit_http_server_port = vit_http_server_port
+        self.vit_grpc_server_port = vit_grpc_server_port
         self.local_rank: int = local_rank
         self.world_rank: int = world_rank
         self.name = name
@@ -266,6 +270,12 @@ class WorkerInfo(object):
                 g_parallel_info.local_rank, int(os.environ.get("REMOTE_SERVER_PORT", 0))
             ),
             backend_server_port=WorkerInfo.backend_server_port_offset(
+                g_parallel_info.local_rank
+            ),
+            vit_http_server_port=WorkerInfo.vit_http_server_port_offset(
+                g_parallel_info.local_rank
+            ),
+            vit_grpc_server_port=WorkerInfo.vit_grpc_server_port_offset(
                 g_parallel_info.local_rank
             ),
             local_rank=g_parallel_info.local_rank,
@@ -316,6 +326,14 @@ class WorkerInfo(object):
     @staticmethod
     def embedding_rpc_server_port_offset(local_rank: int, server_port: int = -1) -> int:
         return WorkerInfo.server_port_offset(local_rank, server_port) + 7
+
+    @staticmethod
+    def vit_http_server_port_offset(local_rank: int, server_port: int = -1) -> int:
+        return WorkerInfo.server_port_offset(local_rank, server_port) + 8
+
+    @staticmethod
+    def vit_grpc_server_port_offset(local_rank: int, server_port: int = -1) -> int:
+        return WorkerInfo.server_port_offset(local_rank, server_port) + 9
 
     # used for ut
     def reload(self):

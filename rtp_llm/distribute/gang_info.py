@@ -32,6 +32,8 @@ def members_from_json(gang_info_json: Dict[str, Any]) -> List[WorkerInfo]:
                 cache_store_connect_port=-1,
                 cache_store_rdma_connect_port=-1,
                 cache_store_rdma_listen_port=-1,
+                vit_http_server_port=-1,
+                vit_grpc_server_port=-1,
                 local_rank=0,
                 world_rank=0,
                 name=info["name"],
@@ -76,6 +78,8 @@ def members_from_test_env(env_str: str) -> List[WorkerInfo]:
                 cache_store_connect_port=-1,
                 cache_store_rdma_connect_port=-1,
                 cache_store_rdma_listen_port=-1,
+                vit_http_server_port=-1,
+                vit_grpc_server_port=-1,
                 local_rank=0,
                 world_rank=0,
                 name=member_info["name"],
@@ -149,6 +153,8 @@ def get_leader_members(env_str: str) -> List[WorkerInfo]:
             cache_store_connect_port=-1,
             cache_store_rdma_connect_port=-1,
             cache_store_rdma_listen_port=-1,
+            vit_http_server_port=-1,
+            vit_grpc_server_port=-1,
             local_rank=0,
             world_rank=0,
             name=member_info["name"],
@@ -178,6 +184,8 @@ def get_leader_members(env_str: str) -> List[WorkerInfo]:
                 cache_store_connect_port=-1,
                 cache_store_rdma_connect_port=-1,
                 cache_store_rdma_listen_port=-1,
+                vit_http_server_port=-1,
+                vit_grpc_server_port=-1,
                 local_rank=0,
                 world_rank=0,
                 name=self_member_info["name"],
@@ -255,6 +263,8 @@ def get_gang_info() -> GangInfo:
                 -1,
                 -1,
                 -1,
+                -1,
+                -1,
                 0,
                 0,
                 "local",
@@ -303,6 +313,12 @@ def get_gang_info() -> GangInfo:
                 ),
                 cache_store_rdma_connect_port=WorkerInfo.cache_store_rdma_listen_port_offset(
                     local_rank, int(os.environ.get("REMOTE_SERVER_PORT", 0))
+                ),
+                vit_http_server_port=WorkerInfo.vit_http_server_port_offset(
+                    local_rank, member.server_port
+                ),
+                vit_grpc_server_port=WorkerInfo.vit_grpc_server_port_offset(
+                    local_rank, member.server_port
                 ),
                 local_rank=local_rank,
                 world_rank=part_rank * g_parallel_info.local_world_size + local_rank,

@@ -18,15 +18,15 @@ public:
     RtpLLMOp();
     ~RtpLLMOp();
 
-    void init(py::object model, py::object mm_process_engine, py::object propose_model, py::object token_processor);
-    void stop();
-    void startHttpServer(py::object model_weights_loader,
-                         py::object lora_infos,
-                         py::object gang_info,
-                         py::object tokenizer,
-                         py::object render);
-    void addLora(const std::string& adapter_name, py::object lora_a_weights, py::object lora_b_weights);
-    void removeLora(const std::string& adapter_name);
+    void               init(py::object model, py::object propose_model, py::object token_processor);
+    void               stop();
+    void               startHttpServer(py::object model_weights_loader,
+                                       py::object lora_infos,
+                                       py::object gang_info,
+                                       py::object tokenizer,
+                                       py::object render);
+    void               addLora(const std::string& adapter_name, py::object lora_a_weights, py::object lora_b_weights);
+    void               removeLora(const std::string& adapter_name);
     EngineScheduleInfo getEngineScheduleInfo(int64_t latest_finished_version);
     WorkerStatusInfo   getWorkerStatusInfo(int64_t latest_finished_version);
     KVCacheInfo        getCacheStatusInfo(int64_t latest_cache_version);
@@ -37,29 +37,27 @@ public:
     void restart();
 
 private:
-    void                                                   _init(int64_t                                                model_rpc_port,
-                                                                 int64_t                                                http_port,
-                                                                 const EngineInitParams                        maga_init_params,
-                                                                 py::object                                             mm_process_engine,
-                                                                 std::unique_ptr<ProposeModelEngineInitParams> propose_params,
-                                                                 py::object                                             token_processor);
+    void                                          _init(int64_t                                       model_rpc_port,
+                                                        int64_t                                       http_port,
+                                                        const EngineInitParams                        maga_init_params,
+                                                        std::unique_ptr<ProposeModelEngineInitParams> propose_params,
+                                                        py::object                                    token_processor);
     EngineInitParams                              initModel(py::object model);
     std::unique_ptr<ProposeModelEngineInitParams> initProposeModel(py::object propose_model);
-    void initRPCServer(const EngineInitParams                        maga_init_params,
-                       py::object                                             mm_process_engine,
-                       std::unique_ptr<ProposeModelEngineInitParams> propose_params,
-                       py::object                                             token_processor);
+    void                                          initRPCServer(const EngineInitParams                        maga_init_params,
+                                                                std::unique_ptr<ProposeModelEngineInitParams> propose_params,
+                                                                py::object                                    token_processor);
 
 private:
     std::unique_ptr<RpcServiceImpl> model_rpc_service_;
     std::shared_ptr<HttpApiServer>  http_server_;
-    std::unique_ptr<grpc::Server>            grpc_server_;
-    std::thread                              grpc_server_thread_;
-    std::atomic<bool>                        is_server_ready_{false};
-    std::atomic<bool>                        is_server_shutdown_{false};
-    size_t                                   model_id_ = 0;
+    std::unique_ptr<grpc::Server>   grpc_server_;
+    std::thread                     grpc_server_thread_;
+    std::atomic<bool>               is_server_ready_{false};
+    std::atomic<bool>               is_server_shutdown_{false};
+    size_t                          model_id_ = 0;
 };
 
 void registerRtpLLMOp(const py::module& m);
 
-}
+}  // namespace rtp_llm

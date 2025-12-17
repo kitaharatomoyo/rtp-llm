@@ -7,7 +7,7 @@ def init_worker_group_args(parser):
         "--worker_info_port_num",
         env_name="WORKER_INFO_PORT_NUM",
         type=int,
-        default=8,
+        default=10,
         help="worker的总的端口的数量",
     )
     worker_group.add_argument(

@@ -12,6 +12,7 @@ CUR_PATH = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(str(CUR_PATH), ".."))
 
 from rtp_llm.config.gpt_init_model_parameters import ConfigMode, GptInitModelParameters
+from rtp_llm.config.task_type import TaskType
 from rtp_llm.distribute.gang_info import get_gang_info
 from rtp_llm.distribute.worker_info import g_parallel_info
 from rtp_llm.model_factory_register import _model_factory
@@ -80,10 +81,27 @@ class ModelFactory:
         model_cls = _model_factory[model_config.model_type]
         config: GptInitModelParameters = model_cls.create_config(model_config)
         config.model_name = model_cls.__name__
+        if config.task_type == TaskType.LANGUAGE_MODEL:
+            # only sep for language model; for embedding task, still use py object for vit process
+            config.vit_separation = 2
         model = model_cls.from_config(config)
         dump_model_to_table(
             ModelFactory.model_config_json(model_cls, model_config, config)
         )
+        return model
+
+    @staticmethod
+    def _create_vit_model(model_config: ModelConfig):
+        global _model_factory
+        if model_config.model_type not in _model_factory:
+            raise Exception(f"model type {model_config.model_type} not registered!")
+        model_cls = _model_factory[model_config.model_type]
+        if not model_cls.is_multimodal():
+            return None
+        config: GptInitModelParameters = model_cls.create_config(model_config)
+        config.vit_separation = 1
+        config.model_name = model_cls.__name__
+        model = model_cls.from_config(config)
         return model
 
     @staticmethod
@@ -154,7 +172,7 @@ class ModelFactory:
         from rtp_llm.async_decoder_engine.engine_creator import create_engine
 
         model = ModelFactory._create_model(model_config)
-        if model_config.model_type == "fake_model" or model.config.vit_separation == 1:
+        if model_config.model_type == "fake_model":
             return model
         propose_model = (
             None
@@ -338,6 +356,16 @@ class ModelFactory:
         ModelFactory.load_default_generate_config(engine)
 
         return engine
+
+    @staticmethod
+    def create_vit_from_env(gang_info=None):
+        from rtp_llm.models.multimodal.mm_process_engine import MMProcessEngine
+
+        normal_model_config = ModelFactory.create_normal_model_config()
+        model = ModelFactory._create_vit_model(normal_model_config)
+        if model is None:
+            return None
+        return MMProcessEngine(model)
 
     @staticmethod
     def create_from_module(ref_module: torch.nn.Module):

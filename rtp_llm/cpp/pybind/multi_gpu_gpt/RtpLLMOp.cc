@@ -89,10 +89,7 @@ std::unique_ptr<ProposeModelEngineInitParams> prepareMTPEngineInitParams(size_t 
 
 RtpLLMOp::RtpLLMOp() {}
 
-void RtpLLMOp::init(py::object model,
-                    py::object mm_process_engine,
-                    py::object propose_model,
-                    py::object token_processor) {
+void RtpLLMOp::init(py::object model, py::object propose_model, py::object token_processor) {
     RTP_LLM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     EngineInitParams params = initModel(model);
@@ -100,12 +97,8 @@ void RtpLLMOp::init(py::object model,
     params.showGptInitParameter();
     std::unique_ptr<ProposeModelEngineInitParams> propose_params = initProposeModel(propose_model);
     pybind11::gil_scoped_release                  release;
-    grpc_server_thread_ = std::thread(&RtpLLMOp::initRPCServer,
-                                      this,
-                                      std::move(params),
-                                      std::move(mm_process_engine),
-                                      std::move(propose_params),
-                                      std::move(token_processor));
+    grpc_server_thread_ = std::thread(
+        &RtpLLMOp::initRPCServer, this, std::move(params), std::move(propose_params), std::move(token_processor));
     grpc_server_thread_.detach();
     while (!is_server_ready_) {
         sleep(1);  // wait 1s for server ready
@@ -194,7 +187,6 @@ KVCacheInfo RtpLLMOp::getCacheStatusInfo(int64_t latest_cache_version) {
 }
 
 void RtpLLMOp::initRPCServer(const EngineInitParams                        maga_init_params,
-                             py::object                                    mm_process_engine,
                              std::unique_ptr<ProposeModelEngineInitParams> propose_params,
                              py::object                                    token_processor) {
     auto http_port      = maga_init_params.gpt_init_parameter.http_port_;
@@ -209,8 +201,7 @@ void RtpLLMOp::initRPCServer(const EngineInitParams                        maga_
         } else {
             model_rpc_service_.reset(new LocalRpcServiceImpl());
         }
-        grpc::Status grpc_status =
-            model_rpc_service_->init(maga_init_params, std::move(mm_process_engine), std::move(propose_params));
+        grpc::Status grpc_status = model_rpc_service_->init(maga_init_params, std::move(propose_params));
         if (!grpc_status.ok()) {
             RTP_LLM_FAIL("init rpc server failed, error msg: %s", grpc_status.error_message().c_str());
         }
@@ -324,12 +315,7 @@ void RtpLLMOp::restart() {
 void registerRtpLLMOp(const py::module& m) {
     pybind11::class_<RtpLLMOp>(m, "RtpLLMOp")
         .def(pybind11::init<>())
-        .def("init",
-             &RtpLLMOp::init,
-             py::arg("model"),
-             py::arg("mm_process_engine"),
-             py::arg("propose_model"),
-             py::arg("token_processor"))
+        .def("init", &RtpLLMOp::init, py::arg("model"), py::arg("propose_model"), py::arg("token_processor"))
         .def("start_http_server",
              &RtpLLMOp::startHttpServer,
              py::arg("model_weights_loader"),

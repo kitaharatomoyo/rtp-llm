@@ -6,6 +6,7 @@ import signal
 import sys
 import time
 import traceback
+from typing import List
 
 import requests
 
@@ -39,7 +40,7 @@ def check_server_health(server_port):
         return False
 
 
-def start_backend_server_impl(global_controller, process_manager=None):
+def start_backend_server_impl(global_controller):
     from rtp_llm.start_backend_server import start_backend_server
 
     profiling_debug_config = ProfilingDebugLoggingConfig()
@@ -76,9 +77,39 @@ def start_backend_server_impl(global_controller, process_manager=None):
     return backend_process
 
 
-def start_frontend_server_impl(
-    global_controller, backend_process, process_manager=None
-):
+def start_vit_server_impl():
+    from rtp_llm.start_backend_server import vit_start_server
+
+    vit_process = multiprocessing.Process(target=vit_start_server, name="vit_server")
+    vit_process.start()
+
+    retry_interval_seconds = 5
+    server_config = ServerConfig()
+    server_config.update_from_env()
+    start_port = server_config.start_port
+    vit_server_port = (
+        WorkerInfo.server_port_offset(0, start_port)
+        if StaticConfig.role_config.role_type == RoleType.VIT
+        else WorkerInfo.vit_http_server_port_offset(0, start_port)
+    )
+    while True:
+        if not vit_process.is_alive():
+            logging.error("vit server is not alive")
+            raise Exception("vit server is not alive")
+
+        try:
+            if check_server_health(vit_server_port):
+                logging.info(f"vit server is ready")
+                break
+            else:
+                time.sleep(retry_interval_seconds)
+        except Exception as e:
+            logging.info(f"vit server is not ready")
+            time.sleep(retry_interval_seconds)
+    return vit_process
+
+
+def start_frontend_server_impl(global_controller):
     from rtp_llm.start_frontend_server import start_frontend_server
 
     server_config = ServerConfig()
@@ -324,7 +355,7 @@ def start_server(parser: EnvArgumentParser, args: argparse.Namespace):
     # Create process manager with config values
     process_manager = ProcessManager(
         shutdown_timeout=worker_config.shutdown_timeout,
-        monitor_interval=worker_config.monitor_interval
+        monitor_interval=worker_config.monitor_interval,
     )
 
     # Auto-configure DeepEP settings based on deployment scenario
@@ -337,21 +368,28 @@ def start_server(parser: EnvArgumentParser, args: argparse.Namespace):
         )
 
     try:
-        backend_process = None
-        if os.environ.get("ROLE_TYPE", "") != "FRONTEND":
+        if os.environ.get("VIT_SEPARATION", "") != "2":
+            logging.info("start vit server")
+            vit_process = start_vit_server_impl()
+            process_manager.add_process(vit_process)
+            logging.info(f"vit server process = {vit_process}")
+
+        if (
+            os.environ.get("ROLE_TYPE", "") != "FRONTEND"
+            and os.environ.get("ROLE_TYPE", "") != "VIT"
+        ):
+            # vit and frontend role do not start backend server
             logging.info("start backend server")
-            backend_process = start_backend_server_impl(
-                global_controller, process_manager
-            )
+            backend_process = start_backend_server_impl(global_controller)
             process_manager.add_process(backend_process)
             logging.info(f"backend server process = {backend_process}")
 
-        logging.info("start frontend server")
-        frontend_process = start_frontend_server_impl(
-            global_controller, backend_process, process_manager
-        )
-        process_manager.add_processes(frontend_process)
-        logging.info(f"frontend server process = {frontend_process}")
+        if os.environ.get("ROLE_TYPE", "") != "VIT":
+            # vit has its own frontend server
+            logging.info("start frontend server")
+            frontend_process = start_frontend_server_impl(global_controller)
+            process_manager.add_processes(frontend_process)
+            logging.info(f"frontend server process = {frontend_process}")
 
         logging.info(f"后端RPC 服务监听的ip为 0.0.0.0，ip/ip段可自定义为所需范围")
     except Exception as e:

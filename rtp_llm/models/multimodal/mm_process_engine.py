@@ -12,7 +12,7 @@ import torch
 from rtp_llm.access_logger.access_logger import MMAccessLogger
 from rtp_llm.cpp.model_rpc.proto.model_rpc_service_pb2 import MultimodalInputsPB
 from rtp_llm.metrics import kmonitor
-from rtp_llm.metrics.kmonitor_metric_reporter import GaugeMetrics
+from rtp_llm.metrics.kmonitor_metric_reporter import AccMetrics, GaugeMetrics
 from rtp_llm.models.multimodal.multimodal_common import MultiModalEmbeddingInterface
 from rtp_llm.models.multimodal.multimodal_util import trans_mm_input, vit_emb_cache_
 from rtp_llm.utils.base_model_datatypes import (
@@ -66,6 +66,8 @@ class MMWorkItem:
         )
         self.embedding_result = vit_emb_cache_.check_cache(self.cache_key)
 
+        self.future = None
+
     @staticmethod
     def download_and_preprocess(
         mm_inputs: List[MultimodalInput],
@@ -79,53 +81,45 @@ class MMWorkItem:
 
     def may_submit_preprocess(
         self,
-        mm_part: Optional[MultiModalEmbeddingInterface] = None,
-        mm_preprocess_executor: Optional[concurrent.futures.ProcessPoolExecutor] = None,
-    ) -> Optional[concurrent.futures.Future]:
+        mm_part: MultiModalEmbeddingInterface,
+        mm_preprocess_executor: concurrent.futures.ProcessPoolExecutor,
+    ) -> None:
         """
         Submit preprocessing task if not cached.
-
-        Returns:
-            Future object if task is submitted, None if result is cached.
         """
         if self.embedding_result is not None:
-            return None
+            return
 
-        if mm_part is None or mm_preprocess_executor is None:
-            raise ValueError("mm_part and mm_preprocess_executor must be provided")
-
-        return mm_preprocess_executor.submit(
+        self.future = mm_preprocess_executor.submit(
             MMWorkItem.download_and_preprocess,
             self.mm_inputs,
             mm_part.get_preprocess_params(),
             mm_part.preprocess_input,
         )
 
-    def may_get_preprocess_result(
-        self, future: Optional[concurrent.futures.Future]
-    ) -> None:
+    def may_get_preprocess_result(self) -> None:
         """
         Get preprocessing result from future.
 
         Note: Future cannot be pickled, so it cannot be a member of MMWorkItem.
         """
-        if future is None:
+        if self.future is None:
             if self.embedding_result is None:
                 raise ValueError("Embedding result and future cannot both be None")
             return
 
         try:
-            self.preprocess_result, preprocess_time = future.result(
+            self.preprocess_result, preprocess_time = self.future.result(
                 timeout=self.mm_timeout_ms / 1000.0
             )
             kmonitor.report(GaugeMetrics.VIT_PREPROCESS_RT_METRIC, preprocess_time)
         except concurrent.futures.TimeoutError:
-            self._safe_cancel_future(future)
+            self._safe_cancel_future(self.future)
             raise TimeoutError(f"Preprocessing timeout after {self.mm_timeout_ms}ms")
         except concurrent.futures.process.BrokenProcessPool:
             raise
         except Exception:
-            self._safe_cancel_future(future)
+            self._safe_cancel_future(self.future)
             raise
 
     @staticmethod
@@ -229,22 +223,22 @@ class MMProcessEngine:
     def mm_embedding_impl(self, mm_inputs: List[MultimodalInput]) -> MMEmbeddingRes:
         """Core implementation for multimodal embedding processing."""
         try:
-            kmonitor.report(GaugeMetrics.VIT_QPS_METRIC, 1, {"source": "mm_embedding"})
+            kmonitor.report(AccMetrics.VIT_QPS_METRIC, 1, {"source": "mm_embedding"})
             self.inc_query_num()
             self._access_logger.log_query_access(mm_inputs)
 
-            work_items, futures = self._create_work_items(mm_inputs)
-            self._wait_for_preprocessing(futures, work_items)
+            work_items = self._create_work_items(mm_inputs)
+            self._wait_for_preprocessing(work_items)
             emb_res, pos_res, tensor_res = self._compute_embeddings(work_items)
 
-            kmonitor.report(GaugeMetrics.VIT_SUCCESS_QPS_METRIC, 1)
+            kmonitor.report(AccMetrics.VIT_SUCCESS_QPS_METRIC, 1)
             result = MMEmbeddingRes(emb_res, pos_res, tensor_res)
             self._access_logger.log_success_access(mm_inputs, str(result))
             return result
         except Exception as e:
             torch.cuda.empty_cache()
             gc.collect()
-            kmonitor.report(GaugeMetrics.VIT_ERROR_QPS_METRIC, 1)
+            kmonitor.report(AccMetrics.VIT_ERROR_QPS_METRIC, 1)
             self._access_logger.log_exception_access(mm_inputs, e)
             raise
         finally:
@@ -292,6 +286,7 @@ class MMProcessEngine:
                 logging.debug("Executor already recovered by another thread")
                 return
 
+            kmonitor.report(AccMetrics.VIT_PROCESS_POOL_RESTART_QPS_METRIC, 1)
             child_pids = self._get_child_pids(old_executor)
 
             try:
@@ -322,7 +317,7 @@ class MMProcessEngine:
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                return work_item.may_submit_preprocess(
+                work_item.may_submit_preprocess(
                     self.model.mm_part, self.mm_preprocess_executor
                 )
             except concurrent.futures.process.BrokenProcessPool:
@@ -338,9 +333,7 @@ class MMProcessEngine:
                     )
                     raise
 
-    def _create_work_items(
-        self, mm_inputs: List[MultimodalInput]
-    ) -> Tuple[List[MMWorkItem], List[Optional[concurrent.futures.Future]]]:
+    def _create_work_items(self, mm_inputs: List[MultimodalInput]) -> List[MMWorkItem]:
         """Create work items and submit preprocessing tasks."""
         batch_size = (
             self.mm_preprocess_batch_size
@@ -348,25 +341,23 @@ class MMProcessEngine:
             else len(mm_inputs)
         )
 
-        work_items, futures = [], []
+        work_items = []
         for index in range(0, len(mm_inputs), batch_size):
             batch = mm_inputs[index : index + batch_size]
             work_item = MMWorkItem(batch)
-            future = self._submit_with_recovery(work_item)
+            self._submit_with_recovery(work_item)
             work_items.append(work_item)
-            futures.append(future)
 
-        return work_items, futures
+        return work_items
 
     def _wait_for_preprocessing(
         self,
-        futures: List[Optional[concurrent.futures.Future]],
         work_items: List[MMWorkItem],
     ) -> None:
         """Wait for all preprocessing tasks to complete."""
-        for future, work_item in zip(futures, work_items):
+        for work_item in work_items:
             try:
-                work_item.may_get_preprocess_result(future)
+                work_item.may_get_preprocess_result()
             except concurrent.futures.process.BrokenProcessPool:
                 logging.error(
                     "BrokenProcessPool detected while waiting for preprocessing result"

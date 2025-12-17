@@ -489,11 +489,7 @@ class GptInitModelParameters:
 
         self.vit_separation = self.py_env_configs.vit_config.vit_separation
         logging.info(f"vit_separation: {self.vit_separation}")
-        self.role_type = (
-            RoleType.VIT
-            if self.vit_separation == 1
-            else self.py_env_configs.role_config.role_type
-        )
+        self.role_type = self.py_env_configs.role_config.role_type
 
         for k, v in kwargs.items():
             setattr(self, k, v)

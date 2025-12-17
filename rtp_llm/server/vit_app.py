@@ -23,6 +23,7 @@ from rtp_llm.distribute.worker_info import WorkerInfo
 from rtp_llm.metrics import kmonitor
 from rtp_llm.model_factory import ModelFactory
 from rtp_llm.models.multimodal.mm_process_engine import MMProcessEngine
+from rtp_llm.ops import RoleType
 from rtp_llm.server.vit_rpc_server import MultimodalRpcServer, create_rpc_server
 
 
@@ -39,10 +40,11 @@ class GracefulShutdownServer(Server):
 class VitEndpointApp:
     def __init__(self, py_env_configs: PyEnvConfigs = StaticConfig):
         self.py_env_configs = py_env_configs
-        self.vit_endpoint_server = VitEndpointServer()
+        self.vit_endpoint_server = VitEndpointServer(self.py_env_configs)
 
     def start(self, worker_info: WorkerInfo):
         self.vit_endpoint_server.start(worker_info)
+
         app = self.create_app(worker_info)
 
         timeout_keep_alive = self.py_env_configs.server_config.timeout_keep_alive
@@ -54,9 +56,17 @@ class VitEndpointApp:
             auto_loop_setup()
             asyncio.set_event_loop(asyncio.new_event_loop())
 
+        http_port = (
+            worker_info.server_port
+            if self.py_env_configs.role_config.role_type == RoleType.VIT
+            else worker_info.vit_http_server_port
+        )
+
+        logging.info(f"Vit App start in http port {http_port}")
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        sock.bind(("0.0.0.0", worker_info.server_port))
+        sock.bind(("0.0.0.0", http_port))
         sock.listen()
         fd = sock.fileno()
         timeout_keep_alive = self.py_env_configs.server_config.timeout_keep_alive
@@ -106,16 +116,27 @@ class VitEndpointApp:
 
 
 class VitEndpointServer:
-    def __init__(self):
-        self.mm_process_engine = MMProcessEngine(ModelFactory.create_from_env())
+    def __init__(self, py_env_configs: PyEnvConfigs = StaticConfig):
+        self.py_env_configs = py_env_configs
+        self.mm_process_engine = ModelFactory.create_vit_from_env()
+        if self.mm_process_engine is None:
+            return
         self.mm_rpc_server = MultimodalRpcServer(self.mm_process_engine)
         self.rpc_server = create_rpc_server()
         add_MultimodalRpcServiceServicer_to_server(self.mm_rpc_server, self.rpc_server)
         kmonitor.init()
 
     def start(self, worker_info: WorkerInfo):
-        self.rpc_server.add_insecure_port(f"0.0.0.0:{worker_info.rpc_server_port}")
+        if self.mm_process_engine is None:
+            return
+        grpc_port = (
+            worker_info.rpc_server_port
+            if self.py_env_configs.role_config.role_type == RoleType.VIT
+            else worker_info.vit_grpc_server_port
+        )
+        self.rpc_server.add_insecure_port(f"0.0.0.0:{grpc_port}")
         self.rpc_server.start()
+        logging.info(f"Vit Server start in grpc port {grpc_port}")
 
     def stop(self):
         self.rpc_server.stop(grace=5)

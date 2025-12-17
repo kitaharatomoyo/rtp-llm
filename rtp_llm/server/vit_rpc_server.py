@@ -78,7 +78,7 @@ def create_rpc_server():
 
 
 def vit_start_rpc_server():
-    model = ModelFactory.create_from_env()
+    mm_process_engine = ModelFactory.create_vit_from_env()
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=200),
         options=[
@@ -90,7 +90,7 @@ def vit_start_rpc_server():
         ],
     )
     add_MultimodalRpcServiceServicer_to_server(
-        MultimodalRpcServer(MMProcessEngine(model)), server
+        MultimodalRpcServer(mm_process_engine), server
     )
     server.add_insecure_port(f"0.0.0.0:{g_worker_info.rpc_server_port}")
     server.start()

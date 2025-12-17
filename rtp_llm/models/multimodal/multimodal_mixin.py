@@ -234,12 +234,6 @@ class MultiModalMixin:
             raise Exception("trt engine is not supported")
             return
 
-        # wait rank0 finish loading weight, otherwise gang_server will die
-        if tp_size > 1:
-            nccl_op_ = NcclOp()
-            nccl_op_.barrier(torch.device(device))
-        # Currently, the multimodel network isn't split between devices. Only Rank 0 loads the weights.
-        # After supporting TP mm network, we will remove the check here.
         if tp_rank >= 1:
             return
 

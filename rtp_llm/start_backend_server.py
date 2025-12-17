@@ -31,6 +31,8 @@ from rtp_llm.utils.util import copy_gemm_config
 
 
 def vit_start_server():
+    setproctitle("rtp_llm_vit_server")
+    os.makedirs("logs", exist_ok=True)
     py_env_configs = PyEnvConfigs()
     py_env_configs.update_from_env()
     app = VitEndpointApp(py_env_configs)
@@ -225,13 +227,6 @@ def start_backend_server(global_controller: ConcurrencyController):
     load_gpu_nic_affinity()
 
     clear_jit_filelock()
-
-    ## collect all args and envs.
-    vit_config = VitConfig()
-    vit_config.update_from_env()
-    # TODO(xinfei.sxf) fix this
-    if vit_config.vit_separation == 1:
-        return vit_start_server()
 
     if not torch.cuda.is_available():
         return local_rank_start(global_controller)

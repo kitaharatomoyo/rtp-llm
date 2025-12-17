@@ -25,6 +25,7 @@ from rtp_llm.utils.base_model_datatypes import (
     GenerateInput,
     GenerateOutput,
     GenerateOutputs,
+    RoleAddr,
 )
 from rtp_llm.utils.grpc_util import trans_option, trans_option_cast, trans_tensor
 
@@ -396,7 +397,7 @@ class ModelRpcClient(object):
         else:
             grpc_timeout_seconds = request_timeout_ms / 1000
         input_py.generate_config.timeout_ms = (int)(grpc_timeout_seconds * 1000)
-        input_pb = trans_input(input_py)
+
         response_iterator = None
         stream_state = StreamState()
 
@@ -417,6 +418,27 @@ class ModelRpcClient(object):
                 if role_addr.ip != "":
                     address_list = [role_addr.ip + ":" + str(role_addr.grpc_port)]
                     break
+
+        # frontend cannot get model multimodal info, so add vit role for all requests unless master distribute one
+        add_vit_address = True
+        for role_addr in input_py.generate_config.role_addrs:
+            if role_addr.role == RoleType.VIT:
+                add_vit_address = False
+                break
+        if add_vit_address:
+            # default use rank0 vit address
+            input_py.generate_config.role_addrs.append(
+                RoleAddr(
+                    role=RoleType.VIT,
+                    ip="localhost",
+                    http_port=g_worker_info.vit_http_server_port,
+                    grpc_port=g_worker_info.vit_grpc_server_port,
+                )
+            )
+        logging.info(
+            f"generate config role addrs: {input_py.generate_config.role_addrs}"
+        )
+        input_pb = trans_input(input_py)
 
         try:
             async with grpc.aio.insecure_channel(

@@ -8,6 +8,7 @@ from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from rtp_llm.config.exceptions import ExceptionType, FtRuntimeException
 from rtp_llm.config.py_config_modules import StaticConfig
+from rtp_llm.distribute.worker_info import g_worker_info
 from rtp_llm.utils.check_util import *
 from rtp_llm.utils.util import check_with_info
 

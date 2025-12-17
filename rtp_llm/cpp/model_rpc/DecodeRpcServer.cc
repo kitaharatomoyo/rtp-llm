@@ -36,9 +36,8 @@ string makeRequestKey(const string& client_id, size_t request_id) {
 namespace rtp_llm {
 
 grpc::Status DecodeRpcServer::init(const EngineInitParams&                                maga_init_params,
-                                   py::object                                             mm_process_engine,
                                    std::unique_ptr<rtp_llm::ProposeModelEngineInitParams> propose_params) {
-    auto ret = RemoteRpcServer::init(maga_init_params, mm_process_engine, std::move(propose_params));
+    auto ret = RemoteRpcServer::init(maga_init_params, std::move(propose_params));
     if (!ret.ok()) {
         return ret;
     }
@@ -88,9 +87,9 @@ void DecodeRpcServer::allocateResource(DecodeGenerateContext& decode_context) {
     auto generate_stream              = engine_->makeStream(input);
     decode_context.request_timeout_ms = generate_stream->getTimeoutMs();
 
-    auto cache_manager = engine_->resourceContext().cache_manager;
-    auto reserve_block_num =
-        maga_init_params_.gpt_init_parameter.fifo_scheduler_config.scheduler_reserve_resource_ratio * cache_manager->totalBlocks() / 100;
+    auto cache_manager     = engine_->resourceContext().cache_manager;
+    auto reserve_block_num = maga_init_params_.gpt_init_parameter.fifo_scheduler_config.scheduler_reserve_resource_ratio
+                             * cache_manager->totalBlocks() / 100;
     auto current_blocks = cache_manager->availableBlockNums();
     if (current_blocks < reserve_block_num) {
         string error_msg = "request: [" + decode_context.request_key + "] malloc kv cache block failed at decode node, "

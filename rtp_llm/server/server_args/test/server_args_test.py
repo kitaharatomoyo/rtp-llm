@@ -233,7 +233,7 @@ class ServerArgsDefaultTest(TestCase):
         self.assertIsNone(env.get("EXTRA_INPUT_IN_MM_EMBEDDING"))
 
         # 25. Worker Configuration
-        self.assertEqual(env.get("WORKER_INFO_PORT_NUM"), "8")
+        self.assertEqual(env.get("WORKER_INFO_PORT_NUM"), "10")
 
         # 26. Model Configuration
         self.assertIsNone(env.get("EXTRA_DATA_PATH"))
