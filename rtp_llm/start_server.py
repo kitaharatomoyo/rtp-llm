@@ -368,11 +368,11 @@ def start_server(parser: EnvArgumentParser, args: argparse.Namespace):
         )
 
     try:
-        if os.environ.get("VIT_SEPARATION", "") != "2":
-            logging.info("start vit server")
-            vit_process = start_vit_server_impl()
-            process_manager.add_process(vit_process)
-            logging.info(f"vit server process = {vit_process}")
+        # default start vit server, return none if not multimodal process or embedding task or vit sep llm role
+        logging.info("start vit server")
+        vit_process = start_vit_server_impl()
+        process_manager.add_process(vit_process)
+        logging.info(f"vit server process = {vit_process}")
 
         if (
             os.environ.get("ROLE_TYPE", "") != "FRONTEND"

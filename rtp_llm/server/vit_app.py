@@ -117,10 +117,13 @@ class VitEndpointApp:
 
 class VitEndpointServer:
     def __init__(self, py_env_configs: PyEnvConfigs = StaticConfig):
+        self.rpc_server = None
+        self.mm_rpc_server = None
         self.py_env_configs = py_env_configs
         self.mm_process_engine = ModelFactory.create_vit_from_env()
         if self.mm_process_engine is None:
             return
+
         self.mm_rpc_server = MultimodalRpcServer(self.mm_process_engine)
         self.rpc_server = create_rpc_server()
         add_MultimodalRpcServiceServicer_to_server(self.mm_rpc_server, self.rpc_server)
@@ -139,8 +142,10 @@ class VitEndpointServer:
         logging.info(f"Vit Server start in grpc port {grpc_port}")
 
     def stop(self):
-        self.rpc_server.stop(grace=5)
-        self.mm_rpc_server.stop()
+        if self.rpc_server is not None:
+            self.rpc_server.stop()
+        if self.mm_rpc_server is not None:
+            self.mm_rpc_server.stop()
 
     def worker_status(self):
         return {}

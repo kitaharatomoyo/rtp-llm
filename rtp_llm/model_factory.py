@@ -99,6 +99,8 @@ class ModelFactory:
         if not model_cls.is_multimodal():
             return None
         config: GptInitModelParameters = model_cls.create_config(model_config)
+        if config.vit_separation == 2 or config.task_type != TaskType.LANGUAGE_MODEL:
+            return None
         config.vit_separation = 1
         config.model_name = model_cls.__name__
         model = model_cls.from_config(config)

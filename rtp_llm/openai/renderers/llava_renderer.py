@@ -84,6 +84,10 @@ class Conversation:
                         crop_positions[2] / crop_positions[4],
                         crop_positions[3] / crop_positions[5],
                     ]
+                elif len(crop_positions) != 4:
+                    raise Exception(
+                        f"crop_positions length must be 4 or 6, but get: {crop_positions}"
+                    )
             else:
                 crop_positions = []
             return MMPreprocessConfig(
