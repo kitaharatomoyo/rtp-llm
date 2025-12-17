@@ -351,6 +351,7 @@ class VitConfig:
         self.mm_preprocess_max_workers: int = 10
         self.mm_batch_size: int = 1
         self.biencoder_preprocess: bool = False
+        self.mm_embedding_max_concurrency: int = 1
 
     def update_from_env(self):
         self.vit_separation = int(os.environ.get("VIT_SEPARATION", self.vit_separation))
@@ -384,6 +385,12 @@ class VitConfig:
 
         self.mm_batch_size = int(os.environ.get("MM_BATCH_SIZE", self.mm_batch_size))
 
+        self.mm_embedding_max_concurrency = int(
+            os.environ.get(
+                "MM_EMBEDDING_MAX_CONCURRENCY", self.mm_embedding_max_concurrency
+            )
+        )
+
         self.biencoder_preprocess = get_env_bool(
             "BIENCODER_PREPROCESS", self.biencoder_preprocess
         )
@@ -404,6 +411,7 @@ class VitConfig:
             f"igraph_default_key: {self.default_key}\n"
             f"mm_preprocess_max_workers: {self.mm_preprocess_max_workers}\n"
             f"mm_batch_size: {self.mm_batch_size}\n"
+            f"mm_embedding_max_concurrency: {self.mm_embedding_max_concurrency}\n"
             f"biencoder_preprocess: {self.biencoder_preprocess}"
         )
 

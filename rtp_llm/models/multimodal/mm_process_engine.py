@@ -3,6 +3,7 @@ import gc
 import logging
 import os
 import signal
+import threading
 import time
 from multiprocessing import Lock
 from typing import Any, Callable, List, Optional, Tuple
@@ -23,6 +24,10 @@ from rtp_llm.utils.base_model_datatypes import (
 from rtp_llm.utils.time_util import Timer
 
 mm_embedding_lock = Lock()
+# Semaphore to limit concurrent VIT embedding executions
+# This prevents too many VIT embeddings from blocking DeepEP communication
+_mm_embedding_semaphore: Optional[threading.Semaphore] = None
+_mm_embedding_semaphore_lock = threading.Lock()
 
 
 class MMEmbeddingRes:
@@ -136,7 +141,9 @@ class MMWorkItem:
         except Exception:
             pass
 
-    def get_embedding_result(self, embedding_func: Callable) -> Any:
+    def get_embedding_result(
+        self, embedding_func: Callable, semaphore: Optional[threading.Semaphore] = None
+    ) -> Any:
         """Compute embedding result from preprocessed data or return cached result."""
         if self.embedding_result is not None:
             return self.embedding_result
@@ -146,12 +153,29 @@ class MMWorkItem:
                 "Preprocess result and embedding result in work item both be None"
             )
 
-        with Timer() as route_timer:
-            with mm_embedding_lock:
-                self.embedding_result = embedding_func(
-                    self.preprocess_result, mm_type=self.mm_type
+        # Acquire semaphore if provided (to limit concurrent VIT embeddings)
+        # This prevents too many VIT embeddings from blocking DeepEP communication
+        if semaphore is not None:
+            semaphore.acquire()
+            try:
+                with Timer() as route_timer:
+                    with mm_embedding_lock:
+                        self.embedding_result = embedding_func(
+                            self.preprocess_result, mm_type=self.mm_type
+                        )
+                kmonitor.report(
+                    GaugeMetrics.VIT_EMBEDDING_RT_METRIC, route_timer.cost_ms()
                 )
-        kmonitor.report(GaugeMetrics.VIT_EMBEDDING_RT_METRIC, route_timer.cost_ms())
+            finally:
+                semaphore.release()
+        else:
+            # Fallback to original behavior if semaphore not provided
+            with Timer() as route_timer:
+                with mm_embedding_lock:
+                    self.embedding_result = embedding_func(
+                        self.preprocess_result, mm_type=self.mm_type
+                    )
+            kmonitor.report(GaugeMetrics.VIT_EMBEDDING_RT_METRIC, route_timer.cost_ms())
 
         if self.need_check_cache:
             vit_emb_cache_.insert_cache(self.cache_key, self.embedding_result)
@@ -171,6 +195,29 @@ class MMProcessEngine:
         self.mm_preprocess_executor = concurrent.futures.ProcessPoolExecutor(
             max_workers=self.model.config.py_env_configs.vit_config.mm_preprocess_max_workers
         )
+
+        # Initialize semaphore for limiting concurrent VIT embeddings
+        # This prevents too many VIT embeddings from blocking DeepEP communication
+        mm_embedding_max_concurrency = (
+            self.model.config.py_env_configs.vit_config.mm_embedding_max_concurrency
+        )
+        global _mm_embedding_semaphore
+        with _mm_embedding_semaphore_lock:
+            if _mm_embedding_semaphore is None:
+                _mm_embedding_semaphore = threading.Semaphore(
+                    mm_embedding_max_concurrency
+                )
+                logging.info(
+                    f"Initialized VIT embedding semaphore with max_concurrency={mm_embedding_max_concurrency}"
+                )
+            elif _mm_embedding_semaphore._value != mm_embedding_max_concurrency:
+                # Update semaphore if max_concurrency changed
+                _mm_embedding_semaphore = threading.Semaphore(
+                    mm_embedding_max_concurrency
+                )
+                logging.info(
+                    f"Updated VIT embedding semaphore with max_concurrency={mm_embedding_max_concurrency}"
+                )
 
         self.query_num: int = 0
         self.query_num_lock = Lock()
@@ -380,8 +427,12 @@ class MMProcessEngine:
         """Compute embeddings for all work items."""
         emb_res, pos_res, tensor_res = [], [], []
 
+        # Use semaphore to limit concurrent VIT embeddings
+        semaphore = _mm_embedding_semaphore
         for work_item in work_items:
-            result = work_item.get_embedding_result(self.model.mm_part.embedding)
+            result = work_item.get_embedding_result(
+                self.model.mm_part.embedding, semaphore=semaphore
+            )
             emb_res.extend(self._maybe_tensor_to_list(result[0], dim=2))
             pos_res.extend(self._maybe_tensor_to_list(result[1], dim=2))
             if len(result) > 2:
