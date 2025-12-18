@@ -38,9 +38,13 @@ class Qwen3_VLImageEmbedding(Qwen2_5_VLImageEmbedding):
     def __init__(self, config: GptInitModelParameters):
         self.mm_processor = AutoProcessor.from_pretrained(config.ckpt_path)
         config_hf = Qwen3VLConfig.from_pretrained(config.ckpt_path)
-        self.visual = Qwen3VLVisionModel._from_config(config_hf.vision_config)
+        self.visual = Qwen3VLVisionModel._from_config(config_hf.vision_config).eval()
         self.spatial_merge_size = self.visual.spatial_merge_size
         self.data_type = config.data_type
+        # Create a dedicated stream for VIT embedding to avoid conflicts with compute_stream
+        # This prevents VIT operations from interfering with DeepEP communication
+        # Use getStreamFromPool for better performance (reuses streams from pool)
+        self.vit_stream = torch.cuda.Stream()
 
     @property
     def _device(self):
@@ -109,12 +113,32 @@ class Qwen3_VLImageEmbedding(Qwen2_5_VLImageEmbedding):
     def embedding(self, data, **kwargs):
         pixel_values = data[0].to(self._device).to(self._data_type)
         grid_thw = data[1].to(self._device)
-        embeds, deepstack_embeds = self.visual(pixel_values, grid_thw=grid_thw)
-        split_sizes = (grid_thw.prod(-1) // self.visual.spatial_merge_size**2).tolist()
-        embeds = torch.split(embeds, split_sizes)
-        pos_id = self.get_position_ids(grid_thw)
-        deepstack_embeds = torch.stack(deepstack_embeds).to(self._data_type)
-        return embeds[0].to(self._data_type), pos_id, deepstack_embeds
+        # Use dedicated VIT stream to avoid conflicts with compute_stream
+        # This ensures VIT operations don't interfere with DeepEP communication
+        with torch.cuda.stream(self.vit_stream):
+            embeds, deepstack_embeds = self.visual(pixel_values, grid_thw=grid_thw)
+            split_sizes = (
+                grid_thw.prod(-1) // self.visual.spatial_merge_size**2
+            ).tolist()
+            embeds = torch.split(embeds, split_sizes)
+            pos_id = self.get_position_ids(grid_thw)
+            deepstack_embeds = torch.stack(deepstack_embeds).to(self._data_type)
+            result_embeds = embeds[0].to(self._data_type)
+
+        # Record stream for returned CUDA tensors to ensure proper synchronization
+        # when they are used on other streams (e.g., compute_stream for LLM forward)
+        # This tells PyTorch: when these tensors are used on default stream,
+        # wait for VIT stream operations to complete
+        # Note: Only CUDA tensors support record_stream, CPU tensors don't need it
+        default_stream = torch.cuda.current_stream()
+        if result_embeds.is_cuda:
+            result_embeds.record_stream(default_stream)
+        if pos_id.is_cuda:
+            pos_id.record_stream(default_stream)
+        if deepstack_embeds.is_cuda:
+            deepstack_embeds.record_stream(default_stream)
+
+        return result_embeds, pos_id, deepstack_embeds
 
 
 class Qwen3VLVitWeight(BaseVitWeights):
