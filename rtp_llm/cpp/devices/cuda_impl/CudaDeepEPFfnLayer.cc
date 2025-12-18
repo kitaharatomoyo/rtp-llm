@@ -177,11 +177,21 @@ MoeDispatchOutput CudaDevice::deepEpDispatch(const MoeDispatchParams& params) {
     }
 
     try {
+        RTP_LLM_LOG_INFO("Before getDispatchLayout: token_num=%ld, expert_num=%d", topk_idx_tensor.size(0), expert_num);
         auto dispatch_layout_output = deepep_buffer_->getDispatchLayout(
             topk_idx_tensor, expert_num, dispatch_begin_event, true /*async*/, true /*allocate_on_comm_stream*/);
+        RTP_LLM_LOG_INFO("After getDispatchLayout: num_tokens_per_rank exists=%d",
+                         dispatch_layout_output.num_tokens_per_rank.defined());
 
+        if (dispatch_layout_output.num_tokens_per_rank.defined()) {
+            auto num_tokens_per_rank_cpu = dispatch_layout_output.num_tokens_per_rank.cpu();
+            for (int i = 0; i < num_tokens_per_rank_cpu.size(0); i++) {
+                RTP_LLM_LOG_INFO("num_tokens_per_rank[%d] = %d", i, num_tokens_per_rank_cpu[i].item<int>());
+            }
+        }
         deep_ep::Config dispatch_config = deepep_buffer_->getDispatchConfig();
 
+        RTP_LLM_LOG_INFO("Before dispatch");
         auto dispatch_output = deepep_buffer_->dispatch(x,
                                                         x_scales /*x_scales*/,
                                                         std::nullopt /*handle*/,
@@ -196,6 +206,7 @@ MoeDispatchOutput CudaDevice::deepEpDispatch(const MoeDispatchParams& params) {
                                                         dispatch_layout_output.event_overlap,
                                                         true /*async_finish*/,
                                                         true /*allocate_on_comm_stream*/);
+        RTP_LLM_LOG_INFO("After dispatch");
 
         DeviceHookPtr comm_hook;
         if (params.overlapped) {
