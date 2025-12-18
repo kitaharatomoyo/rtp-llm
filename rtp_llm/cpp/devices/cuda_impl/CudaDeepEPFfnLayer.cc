@@ -9,6 +9,7 @@
 #include "rtp_llm/cpp/kernels/activation_kernels.h"
 #include "rtp_llm/cpp/core/Dispatch.h"
 #include "rtp_llm/cpp/config/ConfigModules.h"
+#include "rtp_llm/cpp/cuda/cuda_host_utils.h"
 
 using namespace std;
 
@@ -177,6 +178,16 @@ MoeDispatchOutput CudaDevice::deepEpDispatch(const MoeDispatchParams& params) {
     }
 
     try {
+        // Clear any previous CUDA error state before dispatch
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            RTP_LLM_LOG_WARNING("CUDA error before dispatch: %s (cleared)", cudaGetErrorString(err));
+        }
+        auto topk_idx_tensor_cpu = topk_idx_tensor.cpu();
+        for (int i = 0; i < topk_idx_tensor_cpu.size(0); i++) {
+            RTP_LLM_LOG_INFO("topk_idx_tensor_cpu[%d] = %d", i, topk_idx_tensor_cpu[i].item<int64_t>());
+        }
+
         RTP_LLM_LOG_INFO("Before getDispatchLayout: token_num=%ld, expert_num=%d", topk_idx_tensor.size(0), expert_num);
         auto dispatch_layout_output = deepep_buffer_->getDispatchLayout(
             topk_idx_tensor, expert_num, dispatch_begin_event, true /*async*/, true /*allocate_on_comm_stream*/);
@@ -265,6 +276,19 @@ MoeDispatchOutput CudaDevice::deepEpDispatch(const MoeDispatchParams& params) {
 
         return out;
     } catch (const std::exception& e) {
+        // Clear CUDA error state to prevent cascading failures
+        // This is important because timeout errors may leave CUDA in an error state
+        // which would cause subsequent operations (like tensor.to()) to fail
+        cudaError_t cuda_err = cudaGetLastError();
+        if (cuda_err != cudaSuccess) {
+            RTP_LLM_LOG_WARNING("CUDA error detected during exception handling: %s (cleared)",
+                                cudaGetErrorString(cuda_err));
+        }
+        // Synchronize to ensure all pending operations complete
+        // This helps clear any lingering error states
+        cudaDeviceSynchronize();
+        cudaGetLastError();  // Clear error flag after synchronization
+
         RTP_LLM_LOG_ERROR("Failed to dispatch: %s", e.what());
         fflush(stdout);
         fflush(stderr);
