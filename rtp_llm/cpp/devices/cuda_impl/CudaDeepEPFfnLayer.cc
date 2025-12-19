@@ -183,9 +183,22 @@ MoeDispatchOutput CudaDevice::deepEpDispatch(const MoeDispatchParams& params) {
         if (err != cudaSuccess) {
             RTP_LLM_LOG_WARNING("CUDA error before dispatch: %s (cleared)", cudaGetErrorString(err));
         }
-        auto topk_idx_tensor_cpu = topk_idx_tensor.cpu();
-        for (int i = 0; i < topk_idx_tensor_cpu.size(0); i++) {
-            RTP_LLM_LOG_INFO("topk_idx_tensor_cpu[%d] = %d", i, topk_idx_tensor_cpu[i].item<int64_t>());
+
+        // Debug: log topk_idx_tensor shape and sample values
+        if (topk_idx_tensor.size(0) > 0) {
+            RTP_LLM_LOG_INFO("topk_idx_tensor shape: [%ld, %ld]", topk_idx_tensor.size(0), topk_idx_tensor.size(1));
+            auto topk_idx_tensor_cpu = topk_idx_tensor.cpu();
+            // Only log first few tokens to avoid excessive logging
+            int num_log_tokens = std::min(5, (int)topk_idx_tensor_cpu.size(0));
+            for (int i = 0; i < num_log_tokens; i++) {
+                std::string values_str = "";
+                for (int j = 0; j < topk_idx_tensor_cpu.size(1); j++) {
+                    if (j > 0)
+                        values_str += ", ";
+                    values_str += std::to_string(topk_idx_tensor_cpu[i][j].item<int64_t>());
+                }
+                RTP_LLM_LOG_INFO("topk_idx_tensor[%d] = [%s]", i, values_str.c_str());
+            }
         }
 
         RTP_LLM_LOG_INFO("Before getDispatchLayout: token_num=%ld, expert_num=%d", topk_idx_tensor.size(0), expert_num);
