@@ -952,7 +952,7 @@ def convert_gate_up_proj_(ts: List[torch.Tensor]) -> torch.Tensor:
     tensor = tensor.permute(0, 2, 1).contiguous()  # (experts, 1536, hidden)
     split_size = tensor.shape[1] // 2
     gate, up = torch.split(tensor, split_size, dim=1)
-    return torch.cat([up, gate], dim=1)
+    return torch.cat([up, gate], dim=1).contiguous()
 
 
 def convert_down_proj_(ts: List[torch.Tensor]) -> torch.Tensor:

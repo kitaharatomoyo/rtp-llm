@@ -74,7 +74,7 @@ class ModelWeightInfo:
             for weight in self.weights:
                 weights.append(weight.create(weight, quant_config))
         layer_weights: Union[List[WeightModule], List[List[WeightModule]]] = (
-            [] if self.layer_weights else None
+            [] if self.layer_weights else []
         )
         if self.layer_weights:
             for weight in self.layer_weights:
@@ -260,7 +260,6 @@ class ModelDeployWeightInfo:
             weight_info = self._add_attention_output_static_quant_reciprocal(
                 weight_info
             )
-
         if self._quant_algo is not None and self._quant_algo.isQuant():
             weight_info = weight_info.to_quant_weight_info(self._quant_config)
 
