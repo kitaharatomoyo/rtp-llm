@@ -394,6 +394,8 @@ class WorkerInfo(object):
         self.remote_rpc_server_port = new_info.remote_rpc_server_port
         self.cache_store_listen_port = new_info.cache_store_listen_port
         self.cache_store_connect_port = new_info.cache_store_connect_port
+        self.cache_store_rdma_listen_port = new_info.cache_store_rdma_listen_port
+        self.cache_store_rdma_connect_port = new_info.cache_store_rdma_connect_port
         self.rpc_server_port = new_info.rpc_server_port
         self.backend_server_port = new_info.backend_server_port
         self.embedding_rpc_server_port = new_info.embedding_rpc_server_port
