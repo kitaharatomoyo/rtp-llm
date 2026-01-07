@@ -10,9 +10,9 @@ namespace rtp_llm {
 
 FIFOScheduler::FIFOScheduler(const RuntimeConfig&                 runtime_config,
                              const ModelConfig&                   model_config,
-                             const PDSepConfig&                  pd_sep_config,
-                             const ParallelismConfig&            parallelism_config,
-                             const ModelSpecificConfig&          model_specific_config,
+                             const PDSepConfig&                   pd_sep_config,
+                             const ParallelismConfig&             parallelism_config,
+                             const ModelSpecificConfig&           model_specific_config,
                              const std::shared_ptr<CacheManager>& cache_manager,
                              const kmonitor::MetricsReporterPtr   metrics_reporter,
                              const int                            max_score_len):
@@ -24,7 +24,8 @@ FIFOScheduler::FIFOScheduler(const RuntimeConfig&                 runtime_config
     max_generate_batch_size_(runtime_config.max_generate_batch_size),
     need_fill_fake_stream_(parallelism_config.dp_size > 1 && parallelism_config.tp_rank == 0),
     metrics_reporter_(metrics_reporter) {
-    reserve_block_num_ = runtime_config.fifo_scheduler_config.scheduler_reserve_resource_ratio * cache_manager->availableBlockNums() / 100;
+    reserve_block_num_ = runtime_config.fifo_scheduler_config.scheduler_reserve_resource_ratio
+                         * cache_manager->availableBlockNums() / 100;
     RTP_LLM_LOG_INFO("max_generate_batch_size is [%d], max_batch_tokens_size is [%d], reserve_block_num is [%d]",
                      max_generate_batch_size_,
                      max_batch_tokens_size_,
@@ -236,7 +237,7 @@ bool FIFOScheduler::waitPredicate() {
 absl::StatusOr<list<GenerateStreamPtr>> FIFOScheduler::schedule(size_t reserve_step) {
     unique_lock<mutex> lock(lock_);
     if (need_fill_fake_stream_) {
-        cond_.wait_for(lock, std::chrono::milliseconds(10), [this] { return waitPredicate(); });
+        cond_.wait_for(lock, std::chrono::milliseconds(3), [this] { return waitPredicate(); });
     } else {
         cond_.wait(lock, [this] { return waitPredicate(); });
     }
