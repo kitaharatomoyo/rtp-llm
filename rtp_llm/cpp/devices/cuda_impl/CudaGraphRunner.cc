@@ -185,6 +185,7 @@ PyModelOutputs CudaGraphRunner::forward(PyModelInputs& inputs) {
                 graph_instances_[state_.current_real_graph_bs].mem_hold_.decoder_layer_hidden_states_.slice(
                     0, 0, state_.seq_len_sum);
         }
+        cudaStreamSynchronize(capture_stream_.stream());
         RTP_LLM_LOG_INFO("Replay End");
     } else {
         RTP_LLM_LOG_INFO("Normal Cuda Graph Start");
