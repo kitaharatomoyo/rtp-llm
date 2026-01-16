@@ -166,6 +166,24 @@ def get_bytes_io_from_url(url: str, download_headers: str = ""):
         return cached_res
 
 
+def _detach_tensors_in_cache_value(value):
+    """
+    Recursively detach tensors in cache value to prevent memory leaks.
+
+    Args:
+        value: Cache value which may contain tensors or tuples/lists of tensors
+
+    Returns:
+        Value with all tensors detached
+    """
+    if isinstance(value, torch.Tensor):
+        return value.detach()
+    elif isinstance(value, (tuple, list)):
+        return type(value)(_detach_tensors_in_cache_value(item) for item in value)
+    else:
+        return value
+
+
 class MMDataCache(object):
     def __init__(self, cache_size: int = 10):
         self.mm_data_cache: Optional[LruDict] = None
@@ -186,7 +204,9 @@ class MMDataCache(object):
         with self.cache_lock:
             if self.mm_data_cache == None:
                 return
-            self.mm_data_cache[url] = data
+            # Detach tensors to prevent memory leak from computation graph
+            detached_data = _detach_tensors_in_cache_value(data)
+            self.mm_data_cache[url] = detached_data
 
     def resize_cache(self, cache_size: int):
         with self.cache_lock:

@@ -174,9 +174,30 @@ class MMWorkItem:
         kmonitor.report(GaugeMetrics.VIT_EMBEDDING_RT_METRIC, route_timer.cost_ms())
 
         if self.need_check_cache:
+            # Cache will detach tensors internally
             vit_emb_cache_.insert_cache(self.cache_key, self.embedding_result)
 
+        # Clean up preprocess_result to free GPU memory
+        if self.preprocess_result is not None:
+            self._cleanup_preprocess_result()
+            self.preprocess_result = None
+
         return self.embedding_result
+
+    def _cleanup_preprocess_result(self):
+        """Clean up preprocess result to free GPU memory."""
+        if self.preprocess_result is None:
+            return
+        try:
+            if isinstance(self.preprocess_result, (tuple, list)):
+                for item in self.preprocess_result:
+                    if isinstance(item, torch.Tensor) and item.is_cuda:
+                        del item
+            elif isinstance(self.preprocess_result, torch.Tensor):
+                if self.preprocess_result.is_cuda:
+                    del self.preprocess_result
+        except Exception:
+            pass
 
 
 class MMProcessEngine:
@@ -289,6 +310,7 @@ class MMProcessEngine:
 
     def mm_embedding_impl(self, mm_inputs: List[MultimodalInput]) -> MMEmbeddingRes:
         """Core implementation for multimodal embedding processing."""
+        print("Before:", torch.cuda.memory_allocated() / 1e9, "GB")
         try:
             kmonitor.report(AccMetrics.VIT_QPS_METRIC, 1, {"source": "mm_embedding"})
             self.inc_query_num()
@@ -312,6 +334,7 @@ class MMProcessEngine:
             raise
         finally:
             self.dec_query_num()
+            print("After:", torch.cuda.memory_allocated() / 1e9, "GB")
 
     @staticmethod
     def _get_child_pids_from_pool(pool: mp.pool.Pool) -> List[int]:
@@ -465,11 +488,16 @@ class MMProcessEngine:
                 for (idx, work_item), result in zip(pending_items, batch_outputs):
                     work_item.embedding_result = result
                     if work_item.need_check_cache:
+                        # Cache will detach tensors internally
                         vit_emb_cache_.insert_cache(work_item.cache_key, result)
                     ordered_emb[idx] = result[0]
                     ordered_pos[idx] = result[1]
                     if len(result) > 2:
                         ordered_tensor[idx] = result[2]
+                    # Clean up preprocess_result to free GPU memory
+                    if work_item.preprocess_result is not None:
+                        work_item._cleanup_preprocess_result()
+                        work_item.preprocess_result = None
             else:
                 for idx, work_item in pending_items:
                     result = work_item.get_embedding_result(self.mm_part.embedding)

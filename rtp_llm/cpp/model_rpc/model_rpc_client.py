@@ -2,8 +2,16 @@ import functools
 import logging
 from typing import AsyncGenerator, Optional
 
-import grpc
-from grpc import StatusCode
+try:
+    import grpc
+    from grpc import RpcError, StatusCode
+except ImportError as e:
+    print(f"vvv Failed to import grpc module. Please ensure grpcio is installed: {e}")
+    raise ImportError(
+        f"vvv Failed to import grpc module. Please ensure grpcio is installed: {e}"
+    ) from e
+finally:
+    print(f"vvv import grpc module success")
 
 from rtp_llm.config.exceptions import ExceptionType, FtRuntimeException
 from rtp_llm.config.generate_config import RoleType
@@ -398,6 +406,14 @@ class ModelRpcClient(object):
         )
         logging.info(f"addresses: {self._addresses}")
 
+        # Verify that RpcError is accessible (it should be imported at module level)
+        # This is just a sanity check - RpcError should already be available from module-level import
+        if "RpcError" not in globals():
+            raise RuntimeError(
+                "RpcError not found in module namespace - this should not happen!"
+            )
+        logging.debug(f"RpcError is available: {RpcError}")
+
     async def enqueue(
         self, input_py: GenerateInput
     ) -> AsyncGenerator[GenerateOutputs, None]:
@@ -466,7 +482,7 @@ class ModelRpcClient(object):
             # 调用服务器方法并接收流式响应
             async for response in response_iterator.__aiter__():
                 yield trans_output(input_py, response, stream_state)
-        except grpc.RpcError as e:
+        except RpcError as e:
             # TODO(xinfei.sxf) 非流式的请求无法取消了
             if response_iterator:
                 response_iterator.cancel()

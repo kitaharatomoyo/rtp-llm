@@ -240,4 +240,5 @@ class Qwen2VLImageEmbedding(MultiModalEmbeddingInterface):
         grid_thw = data[1].to(self._device)
         embeddings = self.visual(pixel_values, grid_thw=grid_thw).to(self._device)
         pos_id = self.get_position_ids(grid_thw)
-        return embeddings, pos_id
+        # Detach tensors to prevent memory leak from computation graph
+        return embeddings.detach(), pos_id.detach()

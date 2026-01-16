@@ -116,7 +116,12 @@ class Qwen3_VLImageEmbedding(Qwen2_5_VLImageEmbedding):
         embeds = torch.split(embeds, split_sizes)
         pos_id = self.get_position_ids(grid_thw)
         deepstack_embeds = torch.stack(deepstack_embeds).to(self._data_type)
-        return embeds[0].to(self._data_type), pos_id, deepstack_embeds
+        # Detach tensors to prevent memory leak from computation graph
+        return (
+            embeds[0].to(self._data_type).detach(),
+            pos_id.detach(),
+            deepstack_embeds.detach(),
+        )
 
 
 class Qwen3VLVitWeight(BaseVitWeights):
