@@ -117,7 +117,7 @@ class MMWorkItem:
         self.cache_key = (
             self.mm_inputs[0].to_string() if self.need_check_cache else None
         )
-        self.embedding_result = vit_emb_cache_.check_cache(self.cache_key)
+        # self.embedding_result = vit_emb_cache_.check_cache(self.cache_key)
 
         self.future: Optional[mp.pool.AsyncResult] = None
 
@@ -128,12 +128,18 @@ class MMWorkItem:
         """
         Submit preprocessing task if not cached.
         """
+        t0 = time.perf_counter()
         if self.embedding_result is not None:
             return
 
+        t_submit_start = time.perf_counter()
         self.future = mm_preprocess_pool.apply_async(
             _worker_process_task,
             args=(self.mm_inputs,),
+        )
+        t_submit_end = time.perf_counter()
+        logging.info(
+            f"[MM_EMBEDDING_TIMING] may_submit_preprocess: apply_async, elapsed: {(t_submit_end-t_submit_start)*1e6:.2f}us, total: {(t_submit_end-t0)*1e6:.2f}us"
         )
 
     def may_get_preprocess_result(self) -> None:
@@ -146,8 +152,13 @@ class MMWorkItem:
             return
 
         try:
+            t_wait_start = time.perf_counter()
             self.preprocess_result, preprocess_time = self.future.get(
                 timeout=self.mm_timeout_ms / 1000.0
+            )
+            t_wait_end = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] may_get_preprocess_result: future.get() wait, elapsed: {(t_wait_end-t_wait_start)*1e6:.2f}us, preprocess_time: {preprocess_time:.2f}ms"
             )
             kmonitor.report(GaugeMetrics.VIT_PREPROCESS_RT_METRIC, preprocess_time)
         except mp.TimeoutError:
@@ -158,6 +169,7 @@ class MMWorkItem:
 
     def get_embedding_result(self, embedding_func: Callable) -> Any:
         """Compute embedding result from preprocessed data or return cached result."""
+        t0 = time.perf_counter()
         if self.embedding_result is not None:
             return self.embedding_result
 
@@ -166,22 +178,41 @@ class MMWorkItem:
                 "Preprocess result and embedding result in work item both be None"
             )
 
+        t_embed_start = time.perf_counter()
         with Timer() as route_timer:
             with mm_embedding_lock:
                 self.embedding_result = embedding_func(
                     self.preprocess_result, mm_type=self.mm_type
                 )
+        t_embed_end = time.perf_counter()
+        logging.info(
+            f"[MM_EMBEDDING_TIMING] get_embedding_result: embedding_func call, elapsed: {(t_embed_end-t_embed_start)*1e6:.2f}us, route_timer: {route_timer.cost_ms():.2f}ms"
+        )
         kmonitor.report(GaugeMetrics.VIT_EMBEDDING_RT_METRIC, route_timer.cost_ms())
 
         if self.need_check_cache:
+            t_cache_start = time.perf_counter()
             # Cache will detach tensors internally
             vit_emb_cache_.insert_cache(self.cache_key, self.embedding_result)
+            t_cache_end = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] get_embedding_result: insert_cache, elapsed: {(t_cache_end-t_cache_start)*1e6:.2f}us"
+            )
 
         # Clean up preprocess_result to free GPU memory
         if self.preprocess_result is not None:
+            t_cleanup_start = time.perf_counter()
             self._cleanup_preprocess_result()
             self.preprocess_result = None
+            t_cleanup_end = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] get_embedding_result: cleanup, elapsed: {(t_cleanup_end-t_cleanup_start)*1e6:.2f}us"
+            )
 
+        t_final = time.perf_counter()
+        logging.info(
+            f"[MM_EMBEDDING_TIMING] get_embedding_result: total, elapsed: {(t_final-t0)*1e6:.2f}us"
+        )
         return self.embedding_result
 
     def _cleanup_preprocess_result(self):
@@ -233,6 +264,10 @@ class MMProcessEngine:
 
         vit_emb_cache_.resize_cache(self.vit_config.mm_cache_item_num)
         url_data_cache_.resize_cache(self.vit_config.url_cache_item_num)
+
+        logging.info(
+            f"MMProcessEngie init, vit_config: {self.vit_config}, mm_cache_item_num: {self.vit_config.mm_cache_item_num}, url_cache_item_num: {self.vit_config.url_cache_item_num}"
+        )
 
     # # Make the engine picklable for spawn: drop non-picklable fields and recreate lazily.
     # def __getstate__(self):
@@ -310,23 +345,59 @@ class MMProcessEngine:
 
     def mm_embedding_impl(self, mm_inputs: List[MultimodalInput]) -> MMEmbeddingRes:
         """Core implementation for multimodal embedding processing."""
+        t0 = time.perf_counter()
         print("Before:", torch.cuda.memory_allocated() / 1e9, "GB")
         try:
+            t1 = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] Start mm_embedding_impl, elapsed: {(t1-t0)*1e6:.2f}us"
+            )
+
             kmonitor.report(AccMetrics.VIT_QPS_METRIC, 1, {"source": "mm_embedding"})
             self.inc_query_num()
             self._access_logger.log_query_access(mm_inputs)
 
+            t2 = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] After init (kmonitor/inc_query/log_access), elapsed: {(t2-t1)*1e6:.2f}us, total: {(t2-t0)*1e6:.2f}us"
+            )
+
             work_items = self._create_work_items(mm_inputs)
+            t3 = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] After _create_work_items, elapsed: {(t3-t2)*1e6:.2f}us, total: {(t3-t0)*1e6:.2f}us"
+            )
+
             self._wait_for_preprocessing(work_items)
+            t4 = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] After _wait_for_preprocessing, elapsed: {(t4-t3)*1e6:.2f}us, total: {(t4-t0)*1e6:.2f}us"
+            )
+
             emb_res, pos_res, deepstack_embeds_res = self._compute_embeddings(
                 work_items
+            )
+            t5 = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] After _compute_embeddings, elapsed: {(t5-t4)*1e6:.2f}us, total: {(t5-t0)*1e6:.2f}us"
             )
 
             kmonitor.report(AccMetrics.VIT_SUCCESS_QPS_METRIC, 1)
             result = MMEmbeddingRes(emb_res, pos_res, deepstack_embeds_res)
             self._access_logger.log_success_access(mm_inputs, str(result))
+            t6 = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] After build result, elapsed: {(t6-t5)*1e6:.2f}us, total: {(t6-t0)*1e6:.2f}us"
+            )
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] Total mm_embedding_impl time: {(t6-t0)*1e6:.2f}us"
+            )
             return result
         except Exception as e:
+            t_err = time.perf_counter()
+            logging.error(
+                f"[MM_EMBEDDING_TIMING] Exception at {(t_err-t0)*1e6:.2f}us: {e}"
+            )
             torch.cuda.empty_cache()
             gc.collect()
             kmonitor.report(AccMetrics.VIT_ERROR_QPS_METRIC, 1)
@@ -334,7 +405,11 @@ class MMProcessEngine:
             raise
         finally:
             self.dec_query_num()
+            t_final = time.perf_counter()
             print("After:", torch.cuda.memory_allocated() / 1e9, "GB")
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] Finally block, total time: {(t_final-t0)*1e6:.2f}us"
+            )
 
     @staticmethod
     def _get_child_pids_from_pool(pool: mp.pool.Pool) -> List[int]:
@@ -379,12 +454,23 @@ class MMProcessEngine:
 
     def _submit_with_recovery(self, work_item: MMWorkItem) -> None:
         """Submit preprocessing task with automatic recovery from a broken pool."""
+        t0 = time.perf_counter()
         max_retries = 2
         if self.mm_preprocess_pool is None:
+            t_pool_start = time.perf_counter()
             self.mm_preprocess_pool = self._create_pool()
+            t_pool_end = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] _submit_with_recovery: create_pool, elapsed: {(t_pool_end-t_pool_start)*1e6:.2f}us"
+            )
         for attempt in range(max_retries):
             try:
+                t_submit_start = time.perf_counter()
                 work_item.may_submit_preprocess(self.mm_preprocess_pool)
+                t_submit_end = time.perf_counter()
+                logging.info(
+                    f"[MM_EMBEDDING_TIMING] _submit_with_recovery: submit success, elapsed: {(t_submit_end-t_submit_start)*1e6:.2f}us, total: {(t_submit_end-t0)*1e6:.2f}us"
+                )
                 return  # Success
             except (
                 BrokenPipeError,
@@ -395,7 +481,12 @@ class MMProcessEngine:
                     f"Broken pool detected on submit (attempt {attempt + 1}/{max_retries}): {e}"
                 )
                 if attempt < max_retries - 1:
+                    t_recover_start = time.perf_counter()
                     self._recover_from_broken_process_pool()
+                    t_recover_end = time.perf_counter()
+                    logging.info(
+                        f"[MM_EMBEDDING_TIMING] _submit_with_recovery: recover pool, elapsed: {(t_recover_end-t_recover_start)*1e6:.2f}us"
+                    )
                 else:
                     logging.error(
                         f"Failed to recover from broken pool after {max_retries} attempts"
@@ -409,19 +500,38 @@ class MMProcessEngine:
 
     def _create_work_items(self, mm_inputs: List[MultimodalInput]) -> List[MMWorkItem]:
         """Create work items and submit preprocessing tasks."""
+        t0 = time.perf_counter()
         batch_size = (
             self.mm_preprocess_batch_size
             if self.mm_preprocess_batch_size != -1
             else len(mm_inputs)
         )
+        t1 = time.perf_counter()
+        logging.info(
+            f"[MM_EMBEDDING_TIMING] _create_work_items: calc batch_size, elapsed: {(t1-t0)*1e6:.2f}us"
+        )
 
         work_items = []
         for index in range(0, len(mm_inputs), batch_size):
+            t_batch_start = time.perf_counter()
             batch = mm_inputs[index : index + batch_size]
             work_item = MMWorkItem(batch, mm_timeout_ms=self.vit_config.mm_timeout_ms)
+            t_work_item = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] _create_work_items: batch[{index}:{index+batch_size}] create MMWorkItem, elapsed: {(t_work_item-t_batch_start)*1e6:.2f}us"
+            )
+
             self._submit_with_recovery(work_item)
+            t_submit = time.perf_counter()
+            logging.info(
+                f"[MM_EMBEDDING_TIMING] _create_work_items: batch[{index}:{index+batch_size}] submit, elapsed: {(t_submit-t_work_item)*1e6:.2f}us"
+            )
             work_items.append(work_item)
 
+        t_final = time.perf_counter()
+        logging.info(
+            f"[MM_EMBEDDING_TIMING] _create_work_items: total, elapsed: {(t_final-t0)*1e6:.2f}us, created {len(work_items)} work_items"
+        )
         return work_items
 
     def _wait_for_preprocessing(
@@ -429,9 +539,15 @@ class MMProcessEngine:
         work_items: List[MMWorkItem],
     ) -> None:
         """Wait for all preprocessing tasks to complete."""
-        for work_item in work_items:
+        t0 = time.perf_counter()
+        for idx, work_item in enumerate(work_items):
+            t_item_start = time.perf_counter()
             try:
                 work_item.may_get_preprocess_result()
+                t_item_end = time.perf_counter()
+                logging.info(
+                    f"[MM_EMBEDDING_TIMING] _wait_for_preprocessing: work_item[{idx}] get result, elapsed: {(t_item_end-t_item_start)*1e6:.2f}us"
+                )
             except (
                 BrokenPipeError,
                 EOFError,
@@ -446,11 +562,16 @@ class MMProcessEngine:
             except Exception:
                 # Other exceptions (like TimeoutError) are re-raised from may_get_preprocess_result
                 raise
+        t_final = time.perf_counter()
+        logging.info(
+            f"[MM_EMBEDDING_TIMING] _wait_for_preprocessing: total, elapsed: {(t_final-t0)*1e6:.2f}us, waited for {len(work_items)} work_items"
+        )
 
     def _compute_embeddings(
         self, work_items: List[MMWorkItem]
     ) -> Tuple[List[Any], List[Any], List[Any]]:
         """Compute embeddings for all work items."""
+        t0 = time.perf_counter()
         emb_res, pos_res, tensor_res = [], [], []
 
         ordered_emb: List[Optional[Any]] = [None] * len(work_items)
@@ -467,15 +588,25 @@ class MMProcessEngine:
             else:
                 pending_items.append((idx, work_item))
 
+        t1 = time.perf_counter()
+        logging.info(
+            f"[MM_EMBEDDING_TIMING] _compute_embeddings: check cache, elapsed: {(t1-t0)*1e6:.2f}us, pending: {len(pending_items)}/{len(work_items)}"
+        )
+
         if pending_items:
             batch_outputs = None
             try:
+                t_batch_start = time.perf_counter()
                 with Timer() as route_timer:
                     with mm_embedding_lock:
                         batch_outputs = self.mm_part.batched_embedding(
                             [wi.preprocess_result for _, wi in pending_items],
                             [wi.mm_type for _, wi in pending_items],
                         )
+                t_batch_end = time.perf_counter()
+                logging.info(
+                    f"[MM_EMBEDDING_TIMING] _compute_embeddings: batched_embedding, elapsed: {(t_batch_end-t_batch_start)*1e6:.2f}us"
+                )
                 kmonitor.report(
                     GaugeMetrics.VIT_EMBEDDING_RT_METRIC, route_timer.cost_ms()
                 )
@@ -485,6 +616,7 @@ class MMProcessEngine:
                 batch_outputs = None
 
             if batch_outputs is not None:
+                t_process_start = time.perf_counter()
                 for (idx, work_item), result in zip(pending_items, batch_outputs):
                     work_item.embedding_result = result
                     if work_item.need_check_cache:
@@ -498,19 +630,37 @@ class MMProcessEngine:
                     if work_item.preprocess_result is not None:
                         work_item._cleanup_preprocess_result()
                         work_item.preprocess_result = None
+                t_process_end = time.perf_counter()
+                logging.info(
+                    f"[MM_EMBEDDING_TIMING] _compute_embeddings: process batch_outputs, elapsed: {(t_process_end-t_process_start)*1e6:.2f}us"
+                )
             else:
+                t_single_start = time.perf_counter()
                 for idx, work_item in pending_items:
                     result = work_item.get_embedding_result(self.mm_part.embedding)
                     ordered_emb[idx] = result[0]
                     ordered_pos[idx] = result[1]
                     if len(result) > 2:
                         ordered_tensor[idx] = result[2]
+                t_single_end = time.perf_counter()
+                logging.info(
+                    f"[MM_EMBEDDING_TIMING] _compute_embeddings: single embedding, elapsed: {(t_single_end-t_single_start)*1e6:.2f}us"
+                )
 
+        t_convert_start = time.perf_counter()
         for emb, pos, tensor in zip(ordered_emb, ordered_pos, ordered_tensor):
             emb_res.extend(self._maybe_tensor_to_list(emb, dim=2))
             pos_res.extend(self._maybe_tensor_to_list(pos, dim=2))
             tensor_res.extend(self._maybe_tensor_to_list(tensor, dim=3))
+        t_convert_end = time.perf_counter()
+        logging.info(
+            f"[MM_EMBEDDING_TIMING] _compute_embeddings: convert to list, elapsed: {(t_convert_end-t_convert_start)*1e6:.2f}us"
+        )
 
+        t_final = time.perf_counter()
+        logging.info(
+            f"[MM_EMBEDDING_TIMING] _compute_embeddings: total, elapsed: {(t_final-t0)*1e6:.2f}us"
+        )
         return emb_res, pos_res, tensor_res
 
     def stop(self) -> None:
