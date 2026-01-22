@@ -1,7 +1,12 @@
+import cProfile
 import json
 import os
+import pstats
+import tempfile
+import time
 from typing import Any, Dict, List, Optional
 
+import flameprof
 import torch
 import torch.library as tl
 from PIL import Image
@@ -42,6 +47,7 @@ class Qwen3_VLImageEmbedding(Qwen2_5_VLImageEmbedding):
         self.visual = Qwen3VLVisionModel._from_config(config_hf.vision_config)
         self.spatial_merge_size = self.visual.spatial_merge_size
         self.data_type = config.compute_dtype
+        self.ckpt_path = config.ckpt_path
 
     @property
     def _device(self):
@@ -54,52 +60,153 @@ class Qwen3_VLImageEmbedding(Qwen2_5_VLImageEmbedding):
         processor,
         factor: int = 32,
     ):
-        assert len(mm_inputs) == 1
-        mm_input = mm_inputs[0]
-        mm_type = mm_input.mm_type
-        do_resize = True
-        if mm_type == MMUrlType.DEFAULT or mm_type == MMUrlType.IMAGE:
-            image = Image.open(get_bytes_io_from_url(mm_input.url))
-            if mm_input.config.height != -1 and mm_input.config.width != -1:
-                resized_height, resized_width = smart_resize(
-                    mm_input.config.height,
-                    mm_input.config.width,
-                    factor=factor,
+        t0 = time.perf_counter()
+        t_step = t0
+        worker_pid = os.getpid()
+        try:
+            # pr = cProfile.Profile()
+            # pr.enable()
+
+            assert len(mm_inputs) == 1
+            mm_input = mm_inputs[0]
+            mm_type = mm_input.mm_type
+            do_resize = True
+
+            print(f"vvv type(processor) = {type(processor)}")
+            print(f"vvv processor_obj = {processor}")
+
+            if mm_type == MMUrlType.DEFAULT or mm_type == MMUrlType.IMAGE:
+                # Step 1: Get image data from URL
+                t_url_start = time.perf_counter()
+                image_bytes_io = get_bytes_io_from_url(mm_input.url)
+                t_url_end = time.perf_counter()
+                print(
+                    f"   [{worker_pid}] [TIMING] get_bytes_io_from_url: {(t_url_end - t_url_start) * 1000:.2f} ms"
                 )
-                image = image.resize((resized_width, resized_height))
-                do_resize = False
-            elif mm_input.config.max_pixels != -1 or mm_input.config.min_pixels != -1:
-                width, height = image.size
-                min_pixels = (
-                    0
-                    if mm_input.config.min_pixels == -1
-                    else mm_input.config.min_pixels
+
+                # Step 2: Open image
+                t_open_start = time.perf_counter()
+                image = Image.open(image_bytes_io)
+                t_open_end = time.perf_counter()
+                print(
+                    f"   [{worker_pid}] [TIMING] Image.open: {(t_open_end - t_open_start) * 1000:.2f} ms"
                 )
-                max_pixels = (
-                    0x7FFFFFFF
-                    if mm_input.config.max_pixels == -1
-                    else mm_input.config.max_pixels
+
+                # Step 3: Resize logic
+                t_resize_start = time.perf_counter()
+                print(
+                    f"vvv mm_input.config.height = {mm_input.config.height}, mm_input.config.width = {mm_input.config.width}"
                 )
-                resized_height, resized_width = smart_resize(
-                    height,
-                    width,
-                    factor=factor,
-                    min_pixels=min_pixels,
-                    max_pixels=max_pixels,
+                if mm_input.config.height != -1 and mm_input.config.width != -1:
+                    resized_height, resized_width = smart_resize(
+                        mm_input.config.height,
+                        mm_input.config.width,
+                        factor=factor,
+                    )
+                    image = image.resize((resized_width, resized_height))
+                    do_resize = False
+                elif (
+                    mm_input.config.max_pixels != -1 or mm_input.config.min_pixels != -1
+                ):
+                    width, height = image.size
+                    min_pixels = (
+                        0
+                        if mm_input.config.min_pixels == -1
+                        else mm_input.config.min_pixels
+                    )
+                    max_pixels = (
+                        0x7FFFFFFF
+                        if mm_input.config.max_pixels == -1
+                        else mm_input.config.max_pixels
+                    )
+                    resized_height, resized_width = smart_resize(
+                        height,
+                        width,
+                        factor=factor,
+                        min_pixels=min_pixels,
+                        max_pixels=max_pixels,
+                    )
+                    image = image.resize((resized_width, resized_height))
+                    do_resize = False
+                t_resize_end = time.perf_counter()
+                if t_resize_end > t_resize_start + 0.001:  # Only log if > 1ms
+                    print(
+                        f"   [{worker_pid}] [TIMING] resize logic: {(t_resize_end - t_resize_start) * 1000:.2f} ms"
+                    )
+
+                print(f"vvv size = {image.size}, do_resize: {do_resize}")
+                # Step 4: Process image with processor
+                t_process_start = time.perf_counter()
+                print(f"[DEBUG] ========== Image Processing Debug ==========")
+                print(f"[DEBUG] Image size: {image.size}")
+                print(f"[DEBUG] do_resize: {do_resize}")
+                print(f"[DEBUG] Processor type: {type(processor.image_processor)}")
+
+                # 检查 processor 配置
+                if hasattr(processor.image_processor, "size"):
+                    print(f"[DEBUG] Processor size: {processor.image_processor.size}")
+
+                res = processor.image_processor(
+                    image, return_tensors="pt", do_resize=do_resize
                 )
-                image = image.resize((resized_width, resized_height))
-                do_resize = False
-            res = processor.image_processor(
-                image, return_tensors="pt", do_resize=do_resize
+                t_process_end = time.perf_counter()
+                print(
+                    f"   [{worker_pid}] [TIMING] processor.image_processor: {(t_process_end - t_process_start) * 1000:.2f} ms"
+                )
+
+                print(f'[DEBUG] Pixel values shape: {res["pixel_values"].shape}')
+                print(f'[DEBUG] Grid shape: {res["image_grid_thw"]}')
+
+                # 计算 patches 数量
+                if len(res["image_grid_thw"]) > 0:
+                    grid_t, grid_h, grid_w = res["image_grid_thw"][0]
+                    num_patches = grid_t * grid_h * grid_w
+                    print(f"[DEBUG] Number of patches: {num_patches}")
+                    print(f"[DEBUG] Grid: T={grid_t}, H={grid_h}, W={grid_w}")
+
+                print(f"[DEBUG] ===========================================")
+
+                return res["pixel_values"], res["image_grid_thw"]
+            elif mm_type == MMUrlType.VIDEO:
+                t_video_start = time.perf_counter()
+                res = processor.video_processor(
+                    mm_input.url, return_tensors="pt", do_resize=True
+                )
+                t_video_end = time.perf_counter()
+                print(
+                    f"  [{worker_pid}]  [TIMING] processor.video_processor: {(t_video_end - t_video_start) * 1000:.2f} ms"
+                )
+                return res["pixel_values_videos"], res["video_grid_thw"]
+            else:
+                raise Exception("unknown mm url type")
+        finally:
+            pass
+            # pr.disable()
+            # # 先将统计信息保存到临时 .prof 文件，然后使用 flameprof 渲染
+            # with tempfile.NamedTemporaryFile(suffix='.prof', delete=False) as prof_file:
+            #     pr.dump_stats(prof_file.name)
+            #     prof_path = prof_file.name
+
+            # # 使用 pstats.Stats 加载统计信息，然后使用 flameprof 渲染
+            # try:
+            #     stats = pstats.Stats(prof_path)
+            #     with tempfile.NamedTemporaryFile(suffix='.svg', delete=False, mode='w') as svg_file:
+            #         svg_path = svg_file.name
+            #         # flameprof.render 期望 stats.stats 字典和文件对象
+            #         flameprof.render(stats.stats, svg_file)
+            #     print(f"🔥 Flame graph saved to: {svg_path}")
+            # except Exception as e:
+            #     print(f"[Worker {worker_pid}] Warning: Failed to generate flame graph: {e}")
+            # finally:
+            #     # 清理临时 .prof 文件
+            #     try:
+            #         os.unlink(prof_path)
+            #     except:
+            #         pass
+            t1 = time.perf_counter()
+            print(
+                f" [{worker_pid}] Qwen3_VLImageEmbedding.preprocess_input time: {(t1 - t0) * 1000:.2f} ms"
             )
-            return res["pixel_values"], res["image_grid_thw"]
-        elif mm_type == MMUrlType.VIDEO:
-            res = processor.video_processor(
-                mm_input.url, return_tensors="pt", do_resize=True
-            )
-            return res["pixel_values_videos"], res["video_grid_thw"]
-        else:
-            raise Exception("unknown mm url type")
 
     def get_preprocess_params(self):
         return {

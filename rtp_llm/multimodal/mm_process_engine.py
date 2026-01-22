@@ -9,6 +9,7 @@ from multiprocessing import Lock
 from typing import Any, Callable, List, Optional, Tuple
 
 import torch
+from transformers import AutoProcessor
 
 from rtp_llm.access_logger.access_logger import MMAccessLogger
 from rtp_llm.config.log_config import get_log_path
@@ -41,6 +42,8 @@ def _worker_initializer(
     vit_config: VitConfig,
     preprocess_params: dict,
     preprocess_func: Callable,
+    ckpt_path: str,
+    needs_processor: bool,
 ) -> None:
     """
     每个工作进程启动时调用的初始化函数。
@@ -52,6 +55,11 @@ def _worker_initializer(
     _worker_vit_config = vit_config
     _worker_preprocess_params = preprocess_params
     _worker_preprocess_func = preprocess_func
+    # 在worker进程中重新初始化processor，避免序列化CUDA tensor的问题
+    if needs_processor:
+        _worker_preprocess_params["processor"] = AutoProcessor.from_pretrained(
+            ckpt_path
+        )
     logging.info(f"Worker process {os.getpid()} initialized.")
 
 
@@ -284,13 +292,28 @@ class MMProcessEngine:
     def _create_pool(self) -> mp.pool.Pool:
         """Helper function to create a new process pool."""
         logging.info("Creating a new multiprocessing pool for preprocessing...")
+        # 获取ckpt_path，避免传递整个mm_part对象（可能包含CUDA tensor）
+        ckpt_path = getattr(self.mm_part, "ckpt_path", None)
+        if ckpt_path is None:
+            raise ValueError("mm_part must have ckpt_path attribute")
+        # 获取preprocess_params，但移除processor以避免序列化问题
+        preprocess_params = self.mm_part.get_preprocess_params().copy()
+        # 检查是否需要processor，processor将在worker进程中重新初始化
+        needs_processor = "processor" in preprocess_params
+        if needs_processor:
+            preprocess_params.pop("processor", None)
+        logging.info(
+            f"wwwvvv mm_preprocess_max_workers = {self.vit_config.mm_preprocess_max_workers}"
+        )
         return self.mp_context.Pool(
             processes=self.vit_config.mm_preprocess_max_workers,
             initializer=_worker_initializer,
             initargs=(
                 self.vit_config,
-                self.mm_part.get_preprocess_params(),
+                preprocess_params,
                 self.mm_part.preprocess_input,
+                ckpt_path,
+                needs_processor,
             ),
         )
 

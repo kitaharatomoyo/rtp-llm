@@ -1,3 +1,5 @@
+import logging
+import time
 from concurrent import futures
 
 import grpc
@@ -29,12 +31,18 @@ from rtp_llm.utils.grpc_util import trans_from_tensor, trans_tensor
 
 
 def trans_output(res: MMEmbeddingRes):
+    t0 = time.perf_counter()
     output_pb = MultimodalOutputsPB()
     contain_pos = (res.position_ids is not None) and (len(res.position_ids) > 0)
     contain_deepstack = (res.deepstack_embeds is not None) and (
         len(res.deepstack_embeds) > 0
     )
     for i in range(len(res.embeddings)):
+        logging.info(f"embedding[{i}].shape = {res.embeddings[i].shape}")
+        if contain_deepstack:
+            logging.info(
+                f"deepstack_embeds[{i}.shape = {res.deepstack_embeds[i].shape}]"
+            )
         output = MultimodalOutputPB(
             multimodal_embedding=trans_from_tensor(res.embeddings[i]),
             multimodal_pos_id=(
@@ -47,6 +55,14 @@ def trans_output(res: MMEmbeddingRes):
             ),
         )
         output_pb.multimodal_outputs.append(output)
+    t1 = time.perf_counter()
+    # 计算序列化后的大小
+    # serialized_size = output_pb.ByteSize()
+    serialized_size = 0
+    logging.info(
+        f"[VIT_GRPC_TIMING] trans_output: elapsed: {(t1-t0)*1e6:.2f}us, "
+        f"output_count: {len(res.embeddings)}, serialized_size: {serialized_size} bytes ({serialized_size/1024/1024:.2f} MB)"
+    )
     return output_pb
 
 
@@ -55,8 +71,28 @@ class MultimodalRpcServer(MultimodalRpcServiceServicer):
         self.engine = mm_process_engine
 
     def RemoteMultimodalEmbedding(self, multimodal_inputs: MultimodalInputsPB, context):
+        logging.info(f"[VIT_GRPC_TIMING] RemoteMultimodalEmbedding: start www")
+        t0 = time.perf_counter()
+        # 计算输入大小
+        input_size = multimodal_inputs.ByteSize()
+        t_embedding_start = time.perf_counter()
         res: MMEmbeddingRes = self.engine.mm_embedding_rpc(multimodal_inputs)
-        return trans_output(res)
+        t_embedding_end = time.perf_counter()
+        t_trans_start = time.perf_counter()
+        output_pb = trans_output(res)
+        t_trans_end = time.perf_counter()
+        t_final = time.perf_counter()
+        # 计算输出大小
+        # output_size = output_pb.ByteSize()
+        output_size = 0
+        logging.info(
+            f"[VIT_GRPC_TIMING] RemoteMultimodalEmbedding: total: {(t_final-t0)*1e6:.2f}us, "
+            f"embedding: {(t_embedding_end-t_embedding_start)*1e6:.2f}us, "
+            f"trans_output: {(t_trans_end-t_trans_start)*1e6:.2f}us, "
+            f"input_size: {input_size} bytes ({input_size/1024/1024:.2f} MB), "
+            f"output_size: {output_size} bytes ({output_size/1024/1024:.2f} MB)"
+        )
+        return output_pb
 
     def GetWorkerStatus(self, request: StatusVersionPB, context):
         worker_status = WorkerStatusPB()
