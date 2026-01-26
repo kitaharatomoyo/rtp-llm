@@ -237,10 +237,12 @@ void CudaDevice::init() {
 
 // pre-allocate buffer before buffer managaer
 void CudaDevice::commBarrier(const NcclParam& nccl_param) {
-    void* tmpBuffer = nullptr;
-    check_cuda_value(cudaMalloc(&tmpBuffer, 32));
-    check_cuda_value(cudaMemset(tmpBuffer, 0, 32));
-    ftNcclAllReduceSum((float*)tmpBuffer, (float*)tmpBuffer, 32, nccl_param, stream_);
+    void*        tmpBuffer    = nullptr;
+    const int    num_elements = 8;  // 8 float elements = 32 bytes
+    const size_t buffer_size  = num_elements * sizeof(float);
+    check_cuda_value(cudaMalloc(&tmpBuffer, buffer_size));
+    check_cuda_value(cudaMemset(tmpBuffer, 0, buffer_size));
+    ftNcclAllReduceSum((float*)tmpBuffer, (float*)tmpBuffer, num_elements, nccl_param, stream_);
     check_cuda_value(cudaStreamSynchronize(stream_));
     check_cuda_value(cudaFree(tmpBuffer));
 }
