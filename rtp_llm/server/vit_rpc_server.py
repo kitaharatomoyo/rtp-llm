@@ -1,4 +1,7 @@
+import logging
+import time
 from concurrent import futures
+from datetime import datetime
 
 import grpc
 import torch
@@ -54,8 +57,11 @@ class MultimodalRpcServer(MultimodalRpcServiceServicer):
         self.engine = mm_process_engine
 
     def RemoteMultimodalEmbedding(self, multimodal_inputs: MultimodalInputsPB, context):
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logging.info(f"{current_time} RemoteMultimodalEmbedding start")
         res: MMEmbeddingRes = self.engine.mm_embedding_rpc(multimodal_inputs)
         res = trans_output(res)
+        logging.info(f"{current_time} RemoteMultimodalEmbedding end")
         return res
 
     def GetWorkerStatus(self, request: StatusVersionPB, context):

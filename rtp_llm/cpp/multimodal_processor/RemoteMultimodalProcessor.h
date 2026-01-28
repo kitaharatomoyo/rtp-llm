@@ -44,7 +44,9 @@ private:
         auto                stub       = connection.stub;
         MultimodalOutputPB  output_pb;
         grpc::ClientContext context;
+        RTP_LLM_LOG_INFO("MultimodalEmbedding start");
         auto status = stub->RemoteMultimodalEmbedding(&context, QueryConverter::transMMInputsPB(mm_inputs), &output_pb);
+        RTP_LLM_LOG_INFO("MultimodalEmbedding end");
 
         RTP_LLM_LOG_INFO("status: %d", status.ok());
         if (!status.ok()) {
