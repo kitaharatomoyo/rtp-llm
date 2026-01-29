@@ -449,13 +449,30 @@ class MMProcessEngine:
             if not self.vit_config.disable_access_log:
                 self._access_logger.log_query_access(mm_inputs)
 
-            work_items = self._create_work_items(mm_inputs)
-            self._wait_for_preprocessing(work_items)
-            emb_res, pos_res, deepstack_embeds_res = self._compute_embeddings(
-                work_items
-            )
+            with Timer() as overall_timer:
+                work_items = self._create_work_items(mm_inputs)
+
+                with Timer() as preprocess_timer:
+                    self._wait_for_preprocessing(work_items)
+                preprocess_ms = preprocess_timer.cost_ms()
+                logging.info(
+                    "[VIT timing] preprocess_ms=%.2f (work_items=%d)",
+                    preprocess_ms,
+                    len(work_items),
+                )
+
+                emb_res, pos_res, deepstack_embeds_res, vit_forward_ms = (
+                    self._compute_embeddings(work_items)
+                )
 
             result = MMEmbeddingRes(emb_res, pos_res, deepstack_embeds_res)
+            total_ms = overall_timer.cost_ms()
+            logging.info(
+                "[VIT timing] total_vit_engine_ms=%.2f (preprocess_ms=%.2f, vit_forward_ms=%.2f)",
+                total_ms,
+                preprocess_ms,
+                vit_forward_ms,
+            )
             if not self.vit_config.disable_access_log:
                 self._access_logger.log_success_access(mm_inputs, str(result))
 
@@ -502,9 +519,13 @@ class MMProcessEngine:
 
     def _compute_embeddings(
         self, work_items: List[MMWorkItem]
-    ) -> Tuple[List[Any], List[Any], List[Any]]:
-        """Compute embeddings for all work items."""
+    ) -> Tuple[List[Any], List[Any], List[Any], float]:
+        """Compute embeddings for all work items.
+        Returns:
+            (emb_res, pos_res, tensor_res, vit_forward_ms)
+        """
         emb_res, pos_res, tensor_res = [], [], []
+        vit_forward_ms = 0.0
 
         ordered_emb: List[Optional[Any]] = [None] * len(work_items)
         ordered_pos: List[Optional[Any]] = [None] * len(work_items)
@@ -528,7 +549,13 @@ class MMProcessEngine:
                         [wi.preprocess_result for _, wi in pending_items],
                         [wi.mm_type for _, wi in pending_items],
                     )
-            kmonitor.report(GaugeMetrics.VIT_EMBEDDING_RT_METRIC, route_timer.cost_ms())
+            vit_forward_ms = route_timer.cost_ms()
+            kmonitor.report(GaugeMetrics.VIT_EMBEDDING_RT_METRIC, vit_forward_ms)
+            logging.info(
+                "[VIT timing] vit_model_forward_ms=%.2f (batch_size=%d)",
+                vit_forward_ms,
+                len(pending_items),
+            )
 
             if batch_outputs is not None:
                 for (idx, work_item), result in zip(pending_items, batch_outputs):
@@ -544,7 +571,7 @@ class MMProcessEngine:
             emb_res.extend(self._maybe_tensor_to_list(emb, dim=2))
             pos_res.extend(self._maybe_tensor_to_list(pos, dim=2))
             tensor_res.extend(self._maybe_tensor_to_list(tensor, dim=3))
-        return emb_res, pos_res, tensor_res
+        return emb_res, pos_res, tensor_res, vit_forward_ms
 
     def stop(self) -> None:
         """Shutdown the preprocessing executor."""

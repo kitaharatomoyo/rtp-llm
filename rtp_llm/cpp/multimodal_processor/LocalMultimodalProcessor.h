@@ -1,6 +1,9 @@
 #pragma once
 
+#include <chrono>
+
 #include "rtp_llm/cpp/multimodal_processor/MultimodalProcessor.h"
+#include "rtp_llm/cpp/utils/Logger.h"
 
 namespace rtp_llm {
 
@@ -44,7 +47,15 @@ private:
                     mm_preprocess_configs.push_back(mm_preprocess_config);
                 }
 
-                auto res = mm_process_engine_.attr("mm_embedding_cpp")(urls, types, tensors, mm_preprocess_configs);
+                auto   call_start = std::chrono::steady_clock::now();
+                auto   res = mm_process_engine_.attr("mm_embedding_cpp")(urls, types, tensors, mm_preprocess_configs);
+                auto   call_end = std::chrono::steady_clock::now();
+                double cpp_call_vit_engine_ms =
+                    std::chrono::duration<double, std::milli>(call_end - call_start).count();
+                RTP_LLM_LOG_INFO("[VIT timing] cpp_call_vit_engine_ms=%.2f (batch_size=%zu)",
+                                 cpp_call_vit_engine_ms,
+                                 mm_inputs.size());
+
                 auto mm_embedding_vec = convertPyObjectToVec(res.attr("embeddings"));
 
                 MultimodalOutput           mm_embedding_res;
