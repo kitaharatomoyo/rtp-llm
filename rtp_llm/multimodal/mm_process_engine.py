@@ -358,6 +358,20 @@ class MMProcessEngine:
 
         self.mm_part = mm_part
 
+        # Create a dedicated CUDA stream for ViT processing to avoid conflicts with LLM's default stream
+        # This allows ViT and LLM kernels to run in parallel on the GPU
+        if torch.cuda.is_available():
+            self.vit_stream = torch.cuda.Stream(priority=-10)
+            logging.info(
+                "MMProcessEngine: Created dedicated CUDA stream for ViT processing "
+                "(to avoid conflicts with LLM's default stream)"
+            )
+        else:
+            self.vit_stream = None
+            logging.warning(
+                "MMProcessEngine: CUDA not available, ViT will use default stream"
+            )
+
         # 根据 vit_config 创建预处理执行器
         preprocess_params = self.mm_part.get_preprocess_params()
         preprocess_func = self.mm_part.preprocess_input
@@ -545,10 +559,22 @@ class MMProcessEngine:
             batch_outputs = None
             with Timer() as route_timer:
                 with mm_embedding_lock:
-                    batch_outputs = self.mm_part.batched_embedding(
-                        [wi.preprocess_result for _, wi in pending_items],
-                        [wi.mm_type for _, wi in pending_items],
-                    )
+                    # Use dedicated CUDA stream for ViT processing to avoid conflicts with LLM's default stream
+                    if self.vit_stream is not None:
+                        with torch.cuda.stream(self.vit_stream):
+                            batch_outputs = self.mm_part.batched_embedding(
+                                [wi.preprocess_result for _, wi in pending_items],
+                                [wi.mm_type for _, wi in pending_items],
+                            )
+                        # Synchronize the ViT stream to ensure results are ready before returning
+                        # This is necessary because we need to access the results on CPU or default stream
+                        self.vit_stream.synchronize()
+                    else:
+                        # Fallback to default stream if CUDA is not available
+                        batch_outputs = self.mm_part.batched_embedding(
+                            [wi.preprocess_result for _, wi in pending_items],
+                            [wi.mm_type for _, wi in pending_items],
+                        )
             vit_forward_ms = route_timer.cost_ms()
             kmonitor.report(GaugeMetrics.VIT_EMBEDDING_RT_METRIC, vit_forward_ms)
             logging.info(
